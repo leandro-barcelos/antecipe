@@ -1531,3 +1531,264 @@ body {
   font-family: Arial, Helvetica, sans-serif;
   background-color: var(--brand-cream);
 }
+
+.upload-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 9px;
+}
+
+.upload-controls .upload-label {
+  margin: 0;
+}
+
+.config-edit-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 0;
+  border: 0;
+  background: transparent;
+  color: var(--brand-green);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.config-edit-button:hover:not(:disabled) {
+  color: #7654c4;
+}
+
+.config-edit-button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.config-edit-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.upload-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.upload-submit,
+.config-save {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 0 18px;
+  border: 1px solid var(--brand-green);
+  border-radius: 3px;
+  background: var(--brand-green);
+  color: var(--brand-paper);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: background .16s ease, border-color .16s ease, opacity .16s ease;
+}
+
+.upload-submit:hover:not(:disabled),
+.config-save:hover {
+  border-color: var(--brand-green-dark);
+  background: var(--brand-green-dark);
+}
+
+.upload-submit:disabled {
+  cursor: wait;
+  opacity: .72;
+}
+
+.upload-submit .upload-spinner {
+  width: 16px;
+  height: 16px;
+}
+
+.upload-spinner--light {
+  border-color: rgba(251, 248, 239, .45);
+  border-top-color: var(--brand-paper);
+}
+
+.config-dialog {
+  width: min(720px, calc(100% - 32px));
+  max-width: none;
+  max-height: calc(100% - 32px);
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--brand-line);
+  border-radius: 8px;
+  background: var(--brand-paper);
+  color: var(--brand-ink);
+  box-shadow: 0 24px 80px rgba(31, 35, 29, .24);
+}
+
+.config-dialog::backdrop {
+  background: rgba(26, 31, 27, .46);
+  backdrop-filter: blur(3px);
+}
+
+.config-dialog-content {
+  display: flex;
+  max-height: calc(100vh - 32px);
+  flex-direction: column;
+  padding: clamp(20px, 4vw, 32px);
+}
+
+.config-dialog-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.config-dialog-heading h2 {
+  margin: 0;
+  font-family: "VinilaExtendedLight", Arial, sans-serif;
+  font-size: clamp(1.45rem, 4vw, 1.9rem);
+  font-weight: 400;
+  letter-spacing: -.04em;
+}
+
+.config-close {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  place-items: center;
+  border: 1px solid var(--brand-line);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--brand-muted);
+  cursor: pointer;
+  font-size: 23px;
+  line-height: 1;
+}
+
+.config-close:hover {
+  border-color: var(--brand-green);
+  color: var(--brand-green);
+}
+
+.config-description {
+  margin: 14px 0;
+  color: var(--brand-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.config-summary {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 18px;
+  padding: 7px 10px;
+  border: 1px solid #d6e0d7;
+  border-radius: 3px;
+  background: #eff3ec;
+  color: var(--brand-green);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.config-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #3d8a68;
+}
+
+.config-editor-label {
+  margin-bottom: 7px;
+  color: #45473f;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.config-editor {
+  width: 100%;
+  min-height: 280px;
+  max-height: 46vh;
+  padding: 14px;
+  resize: vertical;
+  border: 1px solid #d9d3c2;
+  border-radius: 4px;
+  outline: none;
+  background: #f5f1e6;
+  color: #28362f;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  tab-size: 2;
+}
+
+.config-editor:focus {
+  border-color: var(--brand-green);
+  box-shadow: 0 0 0 3px rgba(7, 83, 67, .08);
+}
+
+.config-help {
+  margin: 7px 0 0;
+  color: var(--brand-muted);
+  font-size: 11px;
+}
+
+.config-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.config-cancel {
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid var(--brand-line);
+  border-radius: 3px;
+  background: transparent;
+  color: #56594f;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.config-cancel:hover {
+  border-color: #b8b19d;
+  background: #f4f0e5;
+}
+
+@media (max-width: 600px) {
+  .upload-controls {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .upload-footer {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .config-editor {
+    min-height: 220px;
+    max-height: 40vh;
+  }
+
+  .config-dialog-actions {
+    flex-direction: column-reverse;
+  }
+
+  .config-dialog-actions > button {
+    width: 100%;
+  }
+}
