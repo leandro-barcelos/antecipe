@@ -107,8 +107,6 @@ async function handleFile(event) {
   formData.append('config', config.value)
 
   try {
-    console.log(formData.get('config'))
-    console.log('Enviando arquivo:', selectedFile.name)
     const response = await axios.post(
       'http://192.168.189.20:8000/api/validate',
       formData
@@ -132,43 +130,47 @@ async function handleFile(event) {
 </script>
 
 <template>
-  <div class="w-full space-y-3">
+  <div class="upload-form">
+    <label class="upload-label" for="receivables-file">Arquivo de lastro</label>
 
-    <label class="block text-sm font-semibold text-gray-700">
-      Arquivo de Lato
+    <label
+      class="upload-dropzone"
+      :class="{ 'upload-dropzone--disabled': loading }"
+      for="receivables-file"
+    >
+      <span class="upload-icon" aria-hidden="true">
+        <svg viewBox="0 0 40 40" fill="none">
+          <path d="M11 5.5h11l8 8V32a2.5 2.5 0 0 1-2.5 2.5h-16A2.5 2.5 0 0 1 9 32V8a2.5 2.5 0 0 1 2-2.5Z" stroke="currentColor" stroke-width="1.6" />
+          <path d="M22 6v8h8M14 22h11m-11 5h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+          <path d="M20 17v7m-3-3 3-3 3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </span>
+
+      <span class="upload-copy">
+        <strong>{{ file ? file.name : 'Selecione seu arquivo CSV' }}</strong>
+        <span>{{ loading ? 'Enviando arquivo...' : 'Escolha um arquivo do seu dispositivo' }}</span>
+      </span>
+
+      <span v-if="loading" class="upload-spinner" aria-label="Enviando"></span>
+      <span v-else class="upload-action">Escolher arquivo</span>
+
+      <input
+        id="receivables-file"
+        type="file"
+        accept=".csv,text/csv"
+        :disabled="loading"
+        @change="handleFile"
+      />
     </label>
 
-    <label class="flex w-full cursor-pointer items-center gap-4
-             rounded-xl border-2 border-dashed border-gray-300
-             bg-white p-5 transition hover:border-blue-500
-             hover:bg-blue-50" :class="{ 'pointer-events-none opacity-60': loading }">
-      <span class="text-3xl">📄</span>
+    <p class="upload-format">Tamanho máximo recomendado: 20 MB</p>
 
-      <div class="flex-1">
-        <p class="text-sm font-medium text-gray-800">
-          {{ file ? file.name : 'Selecione um arquivo CSV' }}
-        </p>
-
-        <p class="mt-1 text-xs text-gray-500">
-          {{ loading ? 'Enviando arquivo...' : 'Formato aceito: .csv' }}
-        </p>
-      </div>
-
-      <span v-if="loading" class="h-5 w-5 animate-spin rounded-full
-               border-2 border-blue-500 border-t-transparent"></span>
-
-      <span v-else class="text-xl text-gray-400">↑</span>
-
-      <input type="file" accept=".csv,text/csv" class="hidden" :disabled="loading" @change="handleFile" />
-    </label>
-
-    <p v-if="error" class="text-sm text-red-600">
+    <p v-if="error" class="upload-message upload-message--error" role="alert">
       {{ error }}
     </p>
 
-    <p v-if="result" class="text-sm text-green-600">
-      Arquivo enviado com sucesso!
+    <p v-if="result" class="upload-message upload-message--success" role="status">
+      Arquivo enviado com sucesso. Confira o resultado da análise abaixo.
     </p>
-
   </div>
 </template>
