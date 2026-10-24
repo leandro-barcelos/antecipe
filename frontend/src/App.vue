@@ -3,5 +3,13 @@ import FileUpload from './components/FileUpload.vue'
 </script>
 
 <template>
-  <FileUpload />
+
+  <FileUpload
+      @upload-success="handleSuccess"
+      @upload-error="handleError"
+    />
+   <ValidationResults
+      v-if="hasResults"
+      :results="results"
+    />
 </template>
