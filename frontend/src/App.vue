@@ -48,7 +48,7 @@ function handleError() {
     <main class="page-content">
       <section class="intro-section" aria-labelledby="page-title">
         <p class="eyebrow"><span></span> ANÁLISE DE CARTEIRA</p>
-        <h1 id="page-title">Decisões melhores<br />começam com <em>clareza.</em></h1>
+        <h1 id="page-title">Decisões melhores<br />começam com <em>Os StarDaltons.</em></h1>
         <p class="intro-copy">
           Envie sua carteira de recebíveis e confira a elegibilidade de cada operação
           com uma análise simples, segura e transparente.
@@ -96,7 +96,7 @@ function handleError() {
 
     <footer class="site-footer">
       <a class="footer-brand" href="#">antecipe</a>
-      <span>Crédito com mais clareza.</span>
+      <span>Crédito com os StarDaltons.</span>
     </footer>
   </div>
 </template>
