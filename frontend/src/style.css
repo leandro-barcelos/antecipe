@@ -1708,38 +1708,175 @@ body {
 }
 
 .config-editor-label {
-  margin-bottom: 7px;
+  margin-bottom: 8px;
   color: #45473f;
   font-size: 12px;
   font-weight: 600;
 }
 
-.config-editor {
-  width: 100%;
-  min-height: 280px;
-  max-height: 46vh;
-  padding: 14px;
-  resize: vertical;
-  border: 1px solid #d9d3c2;
+.config-fund-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.config-fund-summary > div {
+  display: grid;
+  gap: 5px;
+  padding: 11px 12px;
+  border: 1px solid var(--brand-line);
   border-radius: 4px;
-  outline: none;
   background: #f5f1e6;
-  color: #28362f;
-  font-family: Consolas, "Courier New", monospace;
-  font-size: 12px;
-  line-height: 1.6;
-  tab-size: 2;
 }
 
-.config-editor:focus {
-  border-color: var(--brand-green);
-  box-shadow: 0 0 0 3px rgba(7, 83, 67, .08);
+.config-fund-summary > .config-pricing {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+  gap: 10px;
 }
 
-.config-help {
-  margin: 7px 0 0;
+.config-pricing > span {
+  grid-column: 1 / -1;
+}
+
+.config-pricing .pricing-number-field,
+.validator-number-field {
+  display: grid;
+  gap: 5px;
   color: var(--brand-muted);
-  font-size: 11px;
+  font-size: 10px;
+  text-transform: capitalize;
+}
+
+.config-pricing .pricing-number-field input,
+.validator-number-field input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid #d9d3c2;
+  border-radius: 3px;
+  outline: none;
+  background: #fffdf7;
+  color: var(--brand-ink);
+  font-size: 12px;
+}
+
+.config-pricing .pricing-number-field input:focus,
+.validator-number-field input:focus {
+  border-color: var(--brand-green);
+  box-shadow: 0 0 0 2px rgba(7, 83, 67, .08);
+}
+
+.config-fund-summary span {
+  color: var(--brand-muted);
+  font-size: 10px;
+}
+
+.config-fund-summary strong {
+  color: var(--brand-ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.validator-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 40vh;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  border: 0;
+}
+
+.validator-list legend {
+  float: left;
+  width: 100%;
+  padding: 0;
+}
+
+.validator-list legend + .validator-row {
+  clear: both;
+}
+
+.validator-row {
+  display: flex;
+  min-height: 64px;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--brand-line);
+  border-bottom: 0;
+  background: rgba(255, 255, 255, .3);
+  cursor: pointer;
+}
+
+.validator-row:nth-of-type(even) {
+  background: #f5f1e6;
+}
+
+.validator-row:first-of-type {
+  border-radius: 4px 4px 0 0;
+}
+
+.validator-row:last-of-type {
+  border-bottom: 1px solid var(--brand-line);
+  border-radius: 0 0 4px 4px;
+}
+
+.validator-row--inactive {
+  color: #77796f;
+}
+
+.validator-copy {
+  display: grid;
+  flex: 1;
+  gap: 7px;
+  min-width: 0;
+}
+
+.validator-copy strong {
+  color: var(--brand-ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.validator-copy > span {
+  color: var(--brand-muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.validator-number-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.validator-number-field {
+  width: min(160px, 100%);
+}
+
+.validator-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  margin: 2px 0 0;
+  accent-color: var(--brand-green);
+  cursor: pointer;
+}
+
+.validator-state {
+  width: 42px;
+  color: var(--brand-muted);
+  font-size: 10px;
+  text-align: right;
+}
+
+.validator-row:not(.validator-row--inactive) .validator-state {
+  color: var(--brand-green);
+  font-weight: 600;
 }
 
 .config-dialog-actions {
@@ -1779,9 +1916,26 @@ body {
     gap: 12px;
   }
 
-  .config-editor {
-    min-height: 220px;
-    max-height: 40vh;
+  .config-fund-summary {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .config-fund-summary > .config-pricing {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .validator-list {
+    max-height: 36vh;
+  }
+
+  .validator-row {
+    gap: 8px;
+    padding: 10px 8px;
+  }
+
+  .validator-state {
+    width: 38px;
   }
 
   .config-dialog-actions {
