@@ -99,9 +99,9 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
         status, result = await self.request(json.dumps(self.config), content=content)
         self.assertEqual(status, 200)
         self.assertEqual(result, [
-            {"linha": 2, "id": "725714", "status": "APROVADO"},
-            {"linha": 3, "id": "1-759172", "status": "BARRADO", "barrado_por": ["VALOR_MINIMO"]},
-            {"linha": 4, "id": "000351153", "status": "BARRADO", "barrado_por": ["ERRO_CSV"]},
+            {"linha": 2, "id": "725714", "status": "APROVADO", "valor_nominal": '100.00'},
+            {"linha": 3, "id": "1-759172", "status": "BARRADO", "valor_nominal": '99.99', "barrado_por": ["VALOR_MINIMO"]},
+            {"linha": 4, "id": "000351153", "status": "BARRADO", "valor_nominal": None, "barrado_por": ["ERRO_CSV"]},
         ])
 
         for rule in self.config["validadores"]:
@@ -126,9 +126,9 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
         status, result = await self.request(json.dumps(self.config), "estoque.zip", archive.getvalue())
         self.assertEqual(status, 200)
         self.assertEqual(result, [
-            {"linha": 2, "id": "000000001", "status": "APROVADO"},
-            {"linha": 3, "id": "000000002", "status": "BARRADO", "barrado_por": ["CONCENTRACAO_MAXIMA_SACADO"]},
-            {"linha": 4, "id": "000000003", "status": "BARRADO", "barrado_por": ["ERRO_CSV"]},
+            {"linha": 2, "id": "000000001", "status": "APROVADO", "valor_nominal": '100.00'},
+            {"linha": 3, "id": "000000002", "status": "BARRADO", "valor_nominal": '900.00', "barrado_por": ["CONCENTRACAO_MAXIMA_SACADO"]},
+            {"linha": 4, "id": "000000003", "status": "BARRADO", "valor_nominal": None, "barrado_por": ["ERRO_CSV"]},
         ])
 
     async def test_single_import_does_not_retain_rows_and_cleans_up_files_after_response(self):
@@ -176,9 +176,9 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(status, 200)
         self.assertEqual(result, [
-            {"linha": 2, "id": "000000001", "status": "APROVADO"},
-            {"linha": 3, "id": "000000002", "status": "BARRADO", "barrado_por": ["VALOR_MINIMO"]},
-            {"linha": 4, "id": "000000003", "status": "BARRADO", "barrado_por": ["ERRO_CSV"]},
+            {"linha": 2, "id": "000000001", "status": "APROVADO", "valor_nominal": '100.00'},
+            {"linha": 3, "id": "000000002", "status": "BARRADO", "valor_nominal": '99.99', "barrado_por": ["VALOR_MINIMO"]},
+            {"linha": 4, "id": "000000003", "status": "BARRADO", "valor_nominal": None, "barrado_por": ["ERRO_CSV"]},
         ])
 
     async def test_fund_is_mandatory_and_normalized_with_different_batches(self):
@@ -194,11 +194,11 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
         )
         content = self.csv_bytes(("100,00",) * len(funds), funds=funds)
         expected = [
-            {"linha": index + 2, "id": f"{index + 1:09d}", "status": "BARRADO", "barrado_por": ["FUNDO_VALIDO"]}
+            {"linha": index + 2, "id": f"{index + 1:09d}", "status": "BARRADO", "valor_nominal": '100.00', "barrado_por": ["FUNDO_VALIDO"]}
             for index in range(len(funds))
         ]
         for index in (0, 1, 2, 6):
-            expected[index] = {"linha": index + 2, "id": f"{index + 1:09d}", "status": "APROVADO"}
+            expected[index] = {"linha": index + 2, "id": f"{index + 1:09d}", "status": "APROVADO", "valor_nominal": '100.00'}
         for batch_size in (1, 2):
             with (
                 self.subTest(batch_size=batch_size),
@@ -269,7 +269,7 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(result, [{
-            "linha": 2, "id": "000351156", "status": "BARRADO",
+            "linha": 2, "id": "000351156", "status": "BARRADO", "valor_nominal": '50.00',
             "barrado_por": ["SITUACAO_CADASTRAL_SACADO", "VALOR_MINIMO"],
         }])
 
@@ -291,9 +291,9 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
                 status, result = await self.request(json.dumps(self.config), content=content)
                 self.assertEqual(status, 200)
                 self.assertEqual(result, [
-                    {"linha": 2, "id": "000000001", "status": "APROVADO"},
-                    {"linha": 3, "id": "000000002", "status": "BARRADO", "barrado_por": ["SITUACAO_CADASTRAL_SACADO"]},
-                    {"linha": 4, "id": "000000003", "status": "BARRADO", "barrado_por": ["SITUACAO_CADASTRAL_SACADO"]},
+                    {"linha": 2, "id": "000000001", "status": "APROVADO", "valor_nominal": '100.00'},
+                    {"linha": 3, "id": "000000002", "status": "BARRADO", "valor_nominal": '100.00', "barrado_por": ["SITUACAO_CADASTRAL_SACADO"]},
+                    {"linha": 4, "id": "000000003", "status": "BARRADO", "valor_nominal": '100.00', "barrado_por": ["SITUACAO_CADASTRAL_SACADO"]},
                 ])
                 loader.assert_called_once()
 
@@ -327,14 +327,14 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
         )
         expected = {
             "resultados": [
-                {"linha": 2, "id": "000351153", "status": "APROVADO", "valor_nominal": "1000.00", "desconto": "20.00", "valor_liquido": "980.00", "prazo_dias": 30},
-                {"linha": 3, "id": "1-759172", "status": "APROVADO", "valor_nominal": "2000.00", "desconto": "40.00", "valor_liquido": "1960.00", "prazo_dias": 30},
-                {"linha": 4, "id": "000351153", "status": "BARRADO", "barrado_por": ["DUPLICADO"]},
-                {"linha": 5, "id": "LOW", "status": "BARRADO", "barrado_por": ["VALOR_MINIMO"]},
-                {"linha": 6, "id": "BAD", "status": "BARRADO", "barrado_por": ["ERRO_CSV"]},
+                {"linha": 2, "id": "000351153", "status": "APROVADO", "valor_nominal": "1000.00", "valor_liquido": "980.00"},
+                {"linha": 3, "id": "1-759172", "status": "APROVADO", "valor_nominal": "2000.00", "valor_liquido": "1960.00"},
+                {"linha": 4, "id": "000351153", "status": "BARRADO", "valor_nominal": '1000.00', "barrado_por": ["DUPLICADO"]},
+                {"linha": 5, "id": "LOW", "status": "BARRADO", "valor_nominal": '50.00', "barrado_por": ["VALOR_MINIMO"]},
+                {"linha": 6, "id": "BAD", "status": "BARRADO", "valor_nominal": None, "barrado_por": ["ERRO_CSV"]},
             ],
             "totais": {"linhas": 5, "aprovados": 2, "barrados": 3, "duplicatas_excluidas": 1,
-                       "valor_nominal": "3000.00", "desconto": "60.00", "valor_liquido": "2940.00"},
+                       "valor_nominal": "3000.00", "valor_liquido": "2940.00"},
         }
         for batch_size in (1, 2):
             with (
@@ -394,7 +394,7 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(status, 200)
                 self.assertEqual(result["totais"]["aprovados"], 0)
                 self.assertEqual(result["totais"]["valor_nominal"], "0.00")
-                self.assertEqual(result["totais"]["desconto"], "0.00")
+                self.assertNotIn("desconto", result["totais"])
                 self.assertEqual(result["totais"]["valor_liquido"], "0.00")
                 if amounts:
                     self.assertEqual(result["resultados"][0]["barrado_por"], ["PRECIFICACAO_INVALIDA"])
@@ -419,14 +419,30 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {
             "resultados": [{
                 "linha": 2, "id": "000000001", "status": "APROVADO",
-                "valor_nominal": "1000.00", "desconto": "20.00",
-                "valor_liquido": "980.00", "prazo_dias": 30,
+                "valor_nominal": "1000.00",
+                "valor_liquido": "980.00",
             }],
             "totais": {
                 "linhas": 1, "aprovados": 1, "barrados": 0, "duplicatas_excluidas": 0,
-                "valor_nominal": "1000.00", "desconto": "20.00", "valor_liquido": "980.00",
+                "valor_nominal": "1000.00", "valor_liquido": "980.00",
             },
         })
+
+    async def test_nominal_value_is_returned_for_barred_and_invalid_date_rows(self):
+        for precificar in (False, True):
+            with self.subTest(precificar=precificar):
+                status, result = await self.request(
+                    json.dumps(self.config),
+                    content=self.csv_bytes(('50,00', '0,00', 'inválido'), maturity='data inválida'),
+                    precificar=precificar,
+                )
+                self.assertEqual(status, 200)
+                rows = result['resultados'] if precificar else result
+                self.assertEqual([row['valor_nominal'] for row in rows], ['50.00', '0.00', None])
+                self.assertTrue(all(row['status'] == 'BARRADO' for row in rows))
+                self.assertTrue(all('desconto' not in row and 'prazo_dias' not in row and 'valor_liquido' not in row for row in rows))
+                if precificar:
+                    self.assertEqual(result['totais']['valor_nominal'], '0.00')
 
     async def test_only_validate_route_is_available_for_processing(self):
         status, _ = await self.request(json.dumps(self.config), path="/api/portfolio", precificar=None)
@@ -471,9 +487,9 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
         status, result = await self.request(json.dumps(self.config), content=content)
         self.assertEqual(status, 200)
         self.assertEqual(result, [
-            {"linha": 2, "id": "001", "status": "BARRADO", "barrado_por": ["ERRO_CSV"]},
-            {"linha": 3, "id": "002", "status": "APROVADO"},
-            {"linha": 4, "id": "003", "status": "BARRADO", "barrado_por": ["ERRO_CSV"]},
+            {"linha": 2, "id": "001", "status": "BARRADO", "valor_nominal": None, "barrado_por": ["ERRO_CSV"]},
+            {"linha": 3, "id": "002", "status": "APROVADO", "valor_nominal": '100.00'},
+            {"linha": 4, "id": "003", "status": "BARRADO", "valor_nominal": None, "barrado_por": ["ERRO_CSV"]},
         ])
 
     async def test_aggregate_overflow_returns_400_for_concentration_and_portfolio(self):

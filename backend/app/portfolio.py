@@ -45,13 +45,12 @@ def resumo(database):
         COALESCE(SUM(duplicado_de IS NOT NULL),0) AS duplicatas
         FROM recebiveis''').fetchone()
     money = connection.execute('''SELECT COALESCE(SUM(p.nominal),0) AS nominal,
-        COALESCE(SUM(p.desconto),0) AS desconto, COALESCE(SUM(p.liquido),0) AS liquido
+        COALESCE(SUM(p.liquido),0) AS liquido
         FROM precos p JOIN recebiveis r ON r.linha=p.linha WHERE r.aprovado=1''').fetchone()
     return {
         'linhas': counts['linhas'], 'aprovados': counts['aprovados'],
         'barrados': counts['linhas'] - counts['aprovados'],
         'duplicatas_excluidas': counts['duplicatas'],
         'valor_nominal': format_cents(money['nominal']),
-        'desconto': format_cents(money['desconto']),
         'valor_liquido': format_cents(money['liquido']),
     }

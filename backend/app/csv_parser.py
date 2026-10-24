@@ -33,6 +33,7 @@ class ParseResult:
     data: Optional[dict]
     errors: list[str]
     document_id: str = ""
+    nominal_value: Optional[Decimal] = None
 
 
 def parse_money(value: str) -> Decimal:
@@ -92,6 +93,7 @@ def parse_row(item: tuple[int, dict]) -> ParseResult:
         data=data if not errors else None,
         errors=errors,
         document_id=data["NU_DOCUMENTO"],
+        nominal_value=data["VALOR_NOMINAL"] if isinstance(data["VALOR_NOMINAL"], Decimal) else None,
     )
 
 

@@ -86,7 +86,7 @@ class ReceivablesDatabase:
                 cedente = normalizar_cnpj(data.get("DOC_CEDENTE", ""))
                 aquisicao = data.get("DATA_AQUISICAO")
                 vencimento = data.get("DATA_VENCIMENTO_ORIGINAL")
-                amount = data.get("VALOR_NOMINAL")
+                amount = result.nominal_value if result.nominal_value is not None else data.get("VALOR_NOMINAL")
                 batch.append((
                     result.row_number, result.document_id or data.get("NU_DOCUMENTO", ""),
                     normalizar_nome(data.get("NOME_FUNDO", "")),
@@ -131,7 +131,7 @@ class ReceivablesDatabase:
 
     def iter_records(self, *, precificar=False, chunk_size=DEFAULT_CHUNK_SIZE):
         cursor = self.connection.execute("""SELECT r.linha,r.documento,r.aprovado,
-            p.nominal,p.desconto,p.liquido,p.prazo FROM recebiveis r
+            r.nominal,p.liquido FROM recebiveis r
             LEFT JOIN precos p ON p.linha=r.linha ORDER BY r.linha""")
         failures = self.connection.execute("SELECT linha,codigo FROM falhas ORDER BY linha,ordem")
         try:
@@ -139,6 +139,7 @@ class ReceivablesDatabase:
             while batch := cursor.fetchmany(chunk_size):
                 for row in batch:
                     record = {"linha": row['linha'], "id": row['documento'], "status": "APROVADO" if row['aprovado'] else "BARRADO"}
+                    record['valor_nominal'] = format_cents(row['nominal']) if row['nominal'] is not None else None
                     reasons = []
                     while failure is not None and failure['linha'] == row['linha']:
                         reasons.append(failure['codigo'])
@@ -146,12 +147,7 @@ class ReceivablesDatabase:
                     if not row['aprovado']:
                         record['barrado_por'] = reasons
                     elif precificar:
-                        record.update({
-                            'valor_nominal': format_cents(row['nominal']),
-                            'desconto': format_cents(row['desconto']),
-                            'valor_liquido': format_cents(row['liquido']),
-                            'prazo_dias': row['prazo'],
-                        })
+                        record['valor_liquido'] = format_cents(row['liquido'])
                     yield record
         finally:
             cursor.close()
