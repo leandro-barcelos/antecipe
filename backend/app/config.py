@@ -1,12 +1,29 @@
 import json
 from decimal import Decimal, InvalidOperation
 
+from validate_docbr import CNPJ
+
+from .pricing import validar_precificacao
 from .validator import HandlerFactory
 
 
-def validar_configuracao(config):
+def validar_configuracao(config, *, exigir_precificacao=False):
     if not isinstance(config, dict) or not isinstance(config.get("validadores"), list):
         raise ValueError("A configuração deve conter uma lista de validadores")
+
+    fundo = config.get("fundo")
+    if (
+        not isinstance(fundo, dict)
+        or not isinstance(fundo.get("nome"), str)
+        or not fundo["nome"].strip()
+    ):
+        raise ValueError("A configuração deve conter um fundo com nome válido")
+    cnpj = fundo.get("cnpj")
+    if not isinstance(cnpj, str) or not CNPJ().validate(cnpj.strip()):
+        raise ValueError("O CNPJ do fundo deve ser válido")
+
+    if exigir_precificacao or "precificacao" in config:
+        validar_precificacao(config.get("precificacao"))
 
     for regra in config["validadores"]:
         if (

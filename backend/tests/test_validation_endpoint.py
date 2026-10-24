@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from backend.app.csv_parser import REQUIRED_COLUMNS, ParseResult
 from backend.app.main import _write_validation_response, app
+from backend.app.situacao_cadastral import carregar_situacoes_cadastrais
 
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "data/validadores_antecipe.json"
@@ -23,17 +24,24 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
         for rule in self.config["validadores"]:
             rule["ativo"] = rule["codigo"] == "VALOR_MINIMO"
 
-    def csv_bytes(self, amounts=("100,00", "99,99", "inválido"), documents=None):
+    def csv_bytes(
+        self, amounts=("100,00", "99,99", "inválido"), documents=None, ids=None, funds=None,
+        cedentes=None, acquisition="01/01/2026", maturity="31/12/2026",
+    ):
         stream = io.StringIO()
         writer = csv.DictWriter(stream, fieldnames=REQUIRED_COLUMNS, delimiter=";")
         writer.writeheader()
         for index, amount in enumerate(amounts):
+            fund = funds[index] if funds else self.config["fundo"]
             writer.writerow({
+                "NOME_FUNDO": fund.get("nome", ""),
+                "DOC_FUNDO": fund.get("cnpj", ""),
                 "DOC_SACADO": documents[index] if documents else "04.252.011/0001-10",
-                "DOC_CEDENTE": "11.222.333/0001-81",
+                "DOC_CEDENTE": cedentes[index] if cedentes else "11.222.333/0001-81",
+                "NU_DOCUMENTO": ids[index] if ids else f"{index + 1:09d}",
                 "VALOR_NOMINAL": amount,
-                "DATA_AQUISICAO": "01/01/2026",
-                "DATA_VENCIMENTO_ORIGINAL": "31/12/2026",
+                "DATA_AQUISICAO": acquisition,
+                "DATA_VENCIMENTO_ORIGINAL": maturity,
             })
         return stream.getvalue().encode("utf-8")
 
@@ -83,24 +91,22 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
         return status, json.loads(response)
 
     async def test_validates_rows_using_request_config_and_preserves_parse_errors(self):
-        status, result = await self.request(json.dumps(self.config))
+        content = self.csv_bytes(ids=("725714", "1-759172", "000351153"))
+        status, result = await self.request(json.dumps(self.config), content=content)
         self.assertEqual(status, 200)
-        self.assertEqual((result["total"], result["valid"], result["invalid"]), (3, 2, 1))
-        self.assertEqual((result["approved"], result["rejected"]), (1, 1))
-        first, second, invalid = result["results"]
-        self.assertTrue(first["validation"]["aprovado"])
-        self.assertFalse(second["validation"]["aprovado"])
-        self.assertEqual(first["validation"]["resultados"][0]["codigo"], "VALOR_MINIMO")
-        self.assertEqual(invalid["row_number"], 4)
-        self.assertIsNone(invalid["validation"])
-        self.assertTrue(invalid["errors"])
+        self.assertEqual(result, [
+            {"linha": 2, "id": "725714", "status": "APROVADO"},
+            {"linha": 3, "id": "1-759172", "status": "BARRADO", "barrado_por": ["VALOR_MINIMO"]},
+            {"linha": 4, "id": "000351153", "status": "BARRADO", "barrado_por": ["ERRO_CSV"]},
+        ])
 
         for rule in self.config["validadores"]:
             if rule["codigo"] == "VALOR_MINIMO":
                 rule["parametros"]["valor_minimo"] = 50
-        status, result = await self.request(json.dumps(self.config))
+        status, result = await self.request(json.dumps(self.config), content=content)
         self.assertEqual(status, 200)
-        self.assertEqual(result["approved"], 2)
+        self.assertEqual([row["status"] for row in result], ["APROVADO", "APROVADO", "BARRADO"])
+        self.assertNotIn("barrado_por", result[1])
 
     async def test_zip_uses_full_parseable_base_for_concentration(self):
         for rule in self.config["validadores"]:
@@ -115,9 +121,11 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
             ))
         status, result = await self.request(json.dumps(self.config), "estoque.zip", archive.getvalue())
         self.assertEqual(status, 200)
-        self.assertEqual((result["approved"], result["rejected"], result["invalid"]), (1, 1, 1))
-        self.assertTrue(result["results"][0]["validation"]["aprovado"])
-        self.assertFalse(result["results"][1]["validation"]["aprovado"])
+        self.assertEqual(result, [
+            {"linha": 2, "id": "000000001", "status": "APROVADO"},
+            {"linha": 3, "id": "000000002", "status": "BARRADO", "barrado_por": ["CONCENTRACAO_MAXIMA_SACADO"]},
+            {"linha": 4, "id": "000000003", "status": "BARRADO", "barrado_por": ["ERRO_CSV"]},
+        ])
 
     async def test_two_passes_do_not_retain_rows_and_clean_up_files_after_response(self):
         class RowData(dict):
@@ -130,8 +138,11 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
             paths.append(path)
             for index in range(100):
                 data = RowData({
+                    "NOME_FUNDO": self.config["fundo"]["nome"],
+                    "DOC_FUNDO": self.config["fundo"]["cnpj"],
                     "DOC_SACADO": "04.252.011/0001-10",
                     "DOC_CEDENTE": "11.222.333/0001-81",
+                    "NU_DOCUMENTO": f"{index:09d}",
                     "VALOR_NOMINAL": Decimal("100"),
                 })
                 references.append(weakref.ref(data))
@@ -147,7 +158,8 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
             status, result = await self.request(json.dumps(self.config))
 
         self.assertEqual(status, 200)
-        self.assertEqual((result["total"], result["approved"]), (100, 100))
+        self.assertEqual(len(result), 100)
+        self.assertTrue(all(row["status"] == "APROVADO" for row in result))
         self.assertEqual(len(paths), 2)
         self.assertEqual(paths[0], paths[1])
         self.assertFalse(paths[0].parent.exists())
@@ -160,12 +172,64 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
             status, result = await self.request(json.dumps(self.config))
 
         self.assertEqual(status, 200)
-        self.assertEqual((result["total"], result["valid"], result["invalid"]), (3, 2, 1))
-        self.assertEqual((result["approved"], result["rejected"]), (1, 1))
-        self.assertEqual([row["row_number"] for row in result["results"]], [2, 3, 4])
-        self.assertTrue(result["results"][0]["validation"]["aprovado"])
-        self.assertFalse(result["results"][1]["validation"]["aprovado"])
-        self.assertIsNone(result["results"][2]["validation"])
+        self.assertEqual(result, [
+            {"linha": 2, "id": "000000001", "status": "APROVADO"},
+            {"linha": 3, "id": "000000002", "status": "BARRADO", "barrado_por": ["VALOR_MINIMO"]},
+            {"linha": 4, "id": "000000003", "status": "BARRADO", "barrado_por": ["ERRO_CSV"]},
+        ])
+
+    async def test_fund_is_mandatory_and_normalized_in_sequential_and_parallel_validation(self):
+        for rule in self.config["validadores"]:
+            rule["ativo"] = False
+        fund = self.config["fundo"]
+        funds = (
+            {"nome": " antecipe   fidc ", "cnpj": "92234400000180"},
+            {**fund, "cnpj": "11.222.333/0001-81"},
+            {**fund, "nome": "OUTRO FIDC"},
+            {"cnpj": fund["cnpj"]}, {"nome": fund["nome"]}, {}, fund,
+        )
+        content = self.csv_bytes(("100,00",) * len(funds), funds=funds)
+        expected = [
+            {"linha": index + 2, "id": f"{index + 1:09d}", "status": "BARRADO", "barrado_por": ["FUNDO_VALIDO"]}
+            for index in range(len(funds))
+        ]
+        for index in (0, len(funds) - 1):
+            expected[index] = {"linha": index + 2, "id": f"{index + 1:09d}", "status": "APROVADO"}
+        for workers in (1, 2):
+            with (
+                self.subTest(workers=workers),
+                patch("backend.app.main._write_validation_response", side_effect=partial(
+                    _write_validation_response, chunk_size=2, workers=workers
+                )),
+            ):
+                status, result = await self.request(json.dumps(self.config), content=content)
+                self.assertEqual(status, 200)
+                self.assertEqual(result, expected)
+
+    async def test_other_funds_do_not_increase_concentration_base(self):
+        for rule in self.config["validadores"]:
+            rule["ativo"] = rule["codigo"] == "CONCENTRACAO_MAXIMA_SACADO"
+        content = self.csv_bytes(
+            ("100,00", "900,00"),
+            documents=("04.252.011/0001-10", "11.222.333/0001-81"),
+            funds=(self.config["fundo"], {"nome": "OUTRO FIDC", "cnpj": "11.222.333/0001-81"}),
+        )
+        status, result = await self.request(json.dumps(self.config), content=content)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["barrado_por"], ["CONCENTRACAO_MAXIMA_SACADO"])
+        self.assertIn("FUNDO_VALIDO", result[1]["barrado_por"])
+
+    async def test_rejects_invalid_fund_configuration(self):
+        for fund in (None, {}, {"nome": " ", "cnpj": "92234400000180"}, {"nome": "ANTECIPE FIDC", "cnpj": "92234400000181"}):
+            with self.subTest(fund=fund):
+                config = {**self.config, "fundo": fund}
+                status, result = await self.request(json.dumps(config))
+                self.assertEqual(status, 400)
+                self.assertIn("detail", result)
+        config = {key: value for key, value in self.config.items() if key != "fundo"}
+        status, _ = await self.request(json.dumps(config))
+        self.assertEqual(status, 400)
 
     async def test_second_pass_errors_return_400_and_remove_temporary_files(self):
         paths = []
@@ -190,15 +254,146 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
                     json.dumps(self.config), content=self.csv_bytes(amounts)
                 )
                 self.assertEqual(status, 200)
-                self.assertEqual(result["total"], len(amounts))
-                self.assertEqual(result["invalid"], len(amounts))
-                self.assertEqual((result["valid"], result["approved"], result["rejected"]), (0, 0, 0))
+                self.assertEqual(len(result), len(amounts))
+                for row in result:
+                    self.assertEqual(row["status"], "BARRADO")
+                    self.assertEqual(row["barrado_por"], ["ERRO_CSV"])
+
+    async def test_barred_rows_include_failed_and_pending_rules_in_config_order(self):
+        for rule in self.config["validadores"]:
+            rule["ativo"] = rule["codigo"] in {"SITUACAO_CADASTRAL_SACADO", "VALOR_MINIMO"}
+        status, result = await self.request(
+            json.dumps(self.config), content=self.csv_bytes(("50,00",), ids=("000351156",))
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(result, [{
+            "linha": 2, "id": "000351156", "status": "BARRADO",
+            "barrado_por": ["SITUACAO_CADASTRAL_SACADO", "VALOR_MINIMO"],
+        }])
+
+    async def test_cadastral_status_uses_mock_csv_in_sequential_and_parallel_validation(self):
+        for rule in self.config["validadores"]:
+            rule["ativo"] = rule["codigo"] == "SITUACAO_CADASTRAL_SACADO"
+        content = self.csv_bytes(
+            ("100,00", "100,00", "100,00"),
+            documents=("01000171000183", "03.638.251/0001-94", "04.252.011/0001-10"),
+        )
+        for workers in (1, 2):
+            with (
+                self.subTest(workers=workers),
+                patch("backend.app.main.carregar_situacoes_cadastrais", wraps=carregar_situacoes_cadastrais) as loader,
+                patch("backend.app.main._write_validation_response", side_effect=partial(
+                    _write_validation_response, chunk_size=1, workers=workers
+                )),
+            ):
+                status, result = await self.request(json.dumps(self.config), content=content)
+                self.assertEqual(status, 200)
+                self.assertEqual(result, [
+                    {"linha": 2, "id": "000000001", "status": "APROVADO"},
+                    {"linha": 3, "id": "000000002", "status": "BARRADO", "barrado_por": ["SITUACAO_CADASTRAL_SACADO"]},
+                    {"linha": 4, "id": "000000003", "status": "BARRADO", "barrado_por": ["SITUACAO_CADASTRAL_SACADO"]},
+                ])
+                loader.assert_called_once()
+
+    async def test_disabled_cadastral_rule_does_not_load_mock_csv(self):
+        with patch("backend.app.main.carregar_situacoes_cadastrais") as loader:
+            status, _ = await self.request(json.dumps(self.config))
+        self.assertEqual(status, 200)
+        loader.assert_not_called()
 
     async def test_rejects_missing_malformed_or_non_object_json_config(self):
         for config in (None, "{", "[]", "null"):
             with self.subTest(config=config):
                 status, _ = await self.request(config)
                 self.assertEqual(status, 422 if config is None else 400)
+
+    async def test_portfolio_excludes_duplicates_and_sums_only_approved_titles(self):
+        content = self.csv_bytes(
+            ("1000,00", "2000,00", "1000,00", "50,00", "inválido"),
+            ids=("000351153", "1-759172", "000351153", "LOW", "BAD"),
+            maturity="31/01/2026",
+        )
+        expected = {
+            "resultados": [
+                {"linha": 2, "id": "000351153", "status": "APROVADO", "valor_nominal": "1000.00", "desconto": "20.00", "valor_liquido": "980.00", "prazo_dias": 30},
+                {"linha": 3, "id": "1-759172", "status": "APROVADO", "valor_nominal": "2000.00", "desconto": "40.00", "valor_liquido": "1960.00", "prazo_dias": 30},
+                {"linha": 4, "id": "000351153", "status": "BARRADO", "barrado_por": ["DUPLICADO"]},
+                {"linha": 5, "id": "LOW", "status": "BARRADO", "barrado_por": ["VALOR_MINIMO"]},
+                {"linha": 6, "id": "BAD", "status": "BARRADO", "barrado_por": ["ERRO_CSV"]},
+            ],
+            "totais": {"linhas": 5, "aprovados": 2, "barrados": 3, "duplicatas_excluidas": 1,
+                       "valor_nominal": "3000.00", "desconto": "60.00", "valor_liquido": "2940.00"},
+        }
+        for workers in (1, 2):
+            with (
+                self.subTest(workers=workers),
+                patch("backend.app.main._write_validation_response", side_effect=partial(
+                    _write_validation_response, chunk_size=2, workers=workers
+                )),
+            ):
+                status, result = await self.request(json.dumps(self.config), content=content, path="/api/portfolio")
+                self.assertEqual(status, 200)
+                self.assertEqual(result, expected)
+
+    async def test_duplicate_key_preserves_distinct_documents_and_normalizes_cnpjs(self):
+        fund = self.config["fundo"]
+        content = self.csv_bytes(
+            ("100,00",) * 5, ids=("0001", "0001", "0001", "1", "0001"),
+            documents=("04.252.011/0001-10", "11.222.333/0001-81", "04.252.011/0001-10", "04.252.011/0001-10", "04252011000110"),
+            cedentes=("11.222.333/0001-81", "11.222.333/0001-81", "04.252.011/0001-10", "11.222.333/0001-81", "11222333000181"),
+            funds=(fund, fund, fund, fund, {"nome": "antecipe fidc", "cnpj": "92234400000180"}),
+            maturity="31/01/2026",
+        )
+        status, result = await self.request(json.dumps(self.config), content=content, path="/api/portfolio")
+        self.assertEqual(status, 200)
+        self.assertEqual([row["status"] for row in result["resultados"]], ["APROVADO"] * 4 + ["BARRADO"])
+        self.assertEqual(result["resultados"][-1]["barrado_por"], ["DUPLICADO"])
+        self.assertEqual(result["totais"]["valor_liquido"], "392.00")
+
+    async def test_duplicates_do_not_increase_concentration(self):
+        for rule in self.config["validadores"]:
+            rule["ativo"] = rule["codigo"] == "CONCENTRACAO_MAXIMA_SACADO"
+        content = self.csv_bytes(
+            ("100,00", "100,00", "900,00"), ids=("A", "A", "B"),
+            documents=("04.252.011/0001-10", "04.252.011/0001-10", "11.222.333/0001-81"),
+        )
+        status, result = await self.request(json.dumps(self.config), content=content)
+        self.assertEqual(status, 200)
+        self.assertEqual(result[0]["status"], "APROVADO")
+        self.assertEqual(result[1]["barrado_por"], ["DUPLICADO"])
+        self.assertEqual(result[2]["barrado_por"], ["CONCENTRACAO_MAXIMA_SACADO"])
+
+    async def test_invalid_occurrence_does_not_exclude_a_valid_copy(self):
+        content = self.csv_bytes(("inválido", "100,00"), ids=("001", "001"), maturity="31/01/2026")
+        status, result = await self.request(json.dumps(self.config), content=content, path="/api/portfolio")
+        self.assertEqual(status, 200)
+        self.assertEqual(result["resultados"][0]["barrado_por"], ["ERRO_CSV"])
+        self.assertEqual(result["resultados"][1]["status"], "APROVADO")
+        self.assertEqual(result["totais"]["duplicatas_excluidas"], 0)
+        self.assertEqual(result["totais"]["valor_liquido"], "98.00")
+
+    async def test_portfolio_empty_and_invalid_prices_have_zero_totals(self):
+        config = {**self.config, "precificacao": {**self.config["precificacao"], "taxa_mensal_percentual": 200}}
+        for amounts in ((), ("100,00",)):
+            with self.subTest(amounts=amounts):
+                status, result = await self.request(
+                    json.dumps(config), content=self.csv_bytes(amounts, maturity="31/01/2026"), path="/api/portfolio"
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(result["totais"]["aprovados"], 0)
+                self.assertEqual(result["totais"]["valor_nominal"], "0.00")
+                self.assertEqual(result["totais"]["desconto"], "0.00")
+                self.assertEqual(result["totais"]["valor_liquido"], "0.00")
+                if amounts:
+                    self.assertEqual(result["resultados"][0]["barrado_por"], ["PRECIFICACAO_INVALIDA"])
+
+    async def test_portfolio_requires_pricing_but_validation_remains_compatible(self):
+        config = {key: value for key, value in self.config.items() if key != "precificacao"}
+        status, _ = await self.request(json.dumps(config), path="/api/portfolio")
+        self.assertEqual(status, 400)
+        status, result = await self.request(json.dumps(config))
+        self.assertEqual(status, 200)
+        self.assertIsInstance(result, list)
 
     async def test_rejects_invalid_config_structure_and_rule_parameters(self):
         for config in (
@@ -210,7 +405,7 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
             {"validadores": [{"codigo": "VALOR_MINIMO", "ativo": True, "parametros": {"valor_minimo": "NaN"}}]},
         ):
             with self.subTest(config=config):
-                status, result = await self.request(json.dumps(config))
+                status, result = await self.request(json.dumps({"fundo": self.config["fundo"], **config}))
                 self.assertEqual(status, 400)
                 self.assertIn("detail", result)
 

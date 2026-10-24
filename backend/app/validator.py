@@ -26,7 +26,7 @@ class ContextoValidacao:
     """Base nominal completa fornecida, antes dos filtros de elegibilidade.
 
     Os recebíveis devem estar convertidos pelo csv_parser. Situações cadastrais
-    devem ser fornecidas por uma fonte externa, usando o CNPJ completo.
+    devem ser f´ornecidas por uma fonte externa, usando o CNPJ completo.
     """
 
     def __init__(self, recebiveis=(), situacoes_cadastrais=None, data_referencia=None):
@@ -55,6 +55,25 @@ class ContextoValidacao:
                     continue
                 self.totais[campo, "CNPJ"][documento] += valor
                 self.totais[campo, "RAIZ_CNPJ"][documento[:8]] += valor
+
+
+class FundoHandler:
+    code = "FUNDO_VALIDO"
+
+    def __init__(self, fundo):
+        self.nome = " ".join(fundo["nome"].split()).casefold()
+        self.cnpj = normalizar_cnpj(fundo["cnpj"])
+
+    def corresponde(self, target):
+        nome = " ".join((target.get("NOME_FUNDO") or "").split()).casefold()
+        cnpj = normalizar_cnpj(target.get("DOC_FUNDO") or "")
+        return nome == self.nome and cnpj == self.cnpj
+
+    def data(self, target):
+        self.aprovado = self.corresponde(target)
+
+    def executar(self):
+        return self.aprovado
 
 
 class CnpjSacadoHandler:
@@ -208,7 +227,7 @@ class HandlerFactory:
 class Validator:
     def __init__(self, validation_file: dict, contexto=None):
         self.contexto = contexto if contexto is not None else ContextoValidacao()
-        self.rules = [
+        self.rules = [FundoHandler(validation_file["fundo"])] + [
             HandlerFactory.criar(regra["codigo"], regra["parametros"], self.contexto)
             for regra in validation_file["validadores"]
             if regra["ativo"]

@@ -1,203 +1,64 @@
-
-# app/portfolio.py
-
-from collections import defaultdict
-from datetime import date
+import sqlite3
+from contextlib import closing
+from dataclasses import dataclass
 from decimal import Decimal
-from pathlib import Path
-import re
 
-from app.csv_parser import parse_csv
+from .validator import normalizar_cnpj
 
 
-def normalize_cnpj(value):
-    return re.sub(r"\D", "", str(value or ""))
-
-
-def cnpj_root(value):
-    cnpj = normalize_cnpj(value)
-    return cnpj[:8] if len(cnpj) == 14 else None
-
-
-class Portfolio:
-    def __init__(
-        self,
-        file_path: str | Path,
-        fund_cnpj: str,
-        reference_date: date = date(2026, 10, 22),
-    ):
-        self.fund_cnpj = normalize_cnpj(fund_cnpj)
-        self.reference_date = reference_date
-
-        self.total_exposure = Decimal("0")
-        self.sacado_exposure = defaultdict(
-            lambda: Decimal("0")
+def deduplicar(rows, database_path, fundo):
+    """Marca repetições globais sem manter todas as chaves em memória."""
+    with closing(sqlite3.connect(database_path)) as database, database:
+        database.execute("PRAGMA journal_mode=OFF")
+        database.execute("PRAGMA synchronous=OFF")
+        database.execute(
+            "CREATE TABLE IF NOT EXISTS vistos ("
+            "fundo TEXT, cedente TEXT, sacado TEXT, documento TEXT, "
+            "PRIMARY KEY (fundo, cedente, sacado, documento)) WITHOUT ROWID"
         )
-        self.cedente_exposure = defaultdict(
-            lambda: Decimal("0")
-        )
-
-        self.document_keys = set()
-        self.total_rows = 0
-        self.fund_rows = 0
-
-        self.load(file_path)
-
-    @staticmethod
-    def document_key(receivable):
-        return (
-            normalize_cnpj(receivable["DOC_CEDENTE"]),
-            str(receivable["NU_DOCUMENTO"]).strip(),
-            str(receivable["TIPO_RECEBIVEL"]).strip(),
-        )
-
-    def load(self, file_path):
-        for result in parse_csv(
-            file_path,
-            parallel=False,
-            chunk_size=5000,
-        ):
-            self.total_rows += 1
-
-            if result.errors:
-                raise ValueError(
-                    f"Linha {result.row_number}: "
-                    f"{'; '.join(result.errors)}"
+        database.execute("DELETE FROM vistos")
+        for row in rows:
+            row.duplicate = False
+            if not row.errors and fundo.corresponde(row.data):
+                data = row.data
+                chave = (
+                    normalizar_cnpj(data["DOC_FUNDO"]),
+                    normalizar_cnpj(data["DOC_CEDENTE"]),
+                    normalizar_cnpj(data["DOC_SACADO"]),
+                    data["NU_DOCUMENTO"].strip(),
                 )
+                if all(chave):
+                    inserted = database.execute(
+                        "INSERT OR IGNORE INTO vistos VALUES (?, ?, ?, ?)", chave
+                    )
+                    row.duplicate = inserted.rowcount == 0
+            yield row
 
-            row = result.data
 
-            # Índice global de possíveis duplicidades
-            self.document_keys.add(
-                self.document_key(row)
-            )
+@dataclass
+class Carteira:
+    linhas: int = 0
+    aprovados: int = 0
+    duplicatas_excluidas: int = 0
+    valor_nominal: Decimal = Decimal("0.00")
+    desconto: Decimal = Decimal("0.00")
+    valor_liquido: Decimal = Decimal("0.00")
 
-            if normalize_cnpj(row["DOC_FUNDO"]) != self.fund_cnpj:
-                continue
+    def adicionar(self, chunk):
+        self.linhas += chunk.total
+        self.aprovados += chunk.approved
+        self.duplicatas_excluidas += chunk.duplicates
+        self.valor_nominal += chunk.valor_nominal
+        self.desconto += chunk.desconto
+        self.valor_liquido += chunk.valor_liquido
 
-            self.fund_rows += 1
-
-            # Exposição ativa na data-base.
-            # Hipótese: vencimento >= data-base.
-            if (
-                row["DATA_VENCIMENTO_ORIGINAL"]
-                < self.reference_date
-            ):
-                continue
-
-            amount = row["VALOR_NOMINAL"]
-
-            self.total_exposure += amount
-
-            sacado = cnpj_root(row["DOC_SACADO"])
-            cedente = normalize_cnpj(row["DOC_CEDENTE"])
-
-            if sacado:
-                self.sacado_exposure[sacado] += amount
-
-            if cedente:
-                self.cedente_exposure[cedente] += amount
-
-    def is_duplicate(self, receivable):
-        return (
-            self.document_key(receivable)
-            in self.document_keys
-        )
-
-    def check_concentration(
-        self,
-        receivable,
-        max_percent,
-        group_by="RAIZ_CNPJ",
-        entity="sacado",
-        additional_total=Decimal("0"),
-        additional_exposure=Decimal("0"),
-    ):
-        """
-        Simula concentração após inclusão do título.
-
-        additional_total:
-            Valor total de títulos já aprovados no lote.
-
-        additional_exposure:
-            Valor aprovado no lote para o mesmo grupo.
-        """
-
-        amount = Decimal(
-            str(receivable["VALOR_NOMINAL"])
-        )
-
-        if entity == "sacado":
-            document = receivable["DOC_SACADO"]
-            exposures = self.sacado_exposure
-
-        elif entity == "cedente":
-            document = receivable["DOC_CEDENTE"]
-            exposures = self.cedente_exposure
-
-        else:
-            raise ValueError("Entidade inválida")
-
-        if group_by == "RAIZ_CNPJ":
-            key = cnpj_root(document)
-        elif group_by == "CNPJ":
-            key = normalize_cnpj(document)
-        else:
-            raise ValueError(
-                f"Agrupamento não suportado: {group_by}"
-            )
-
-        if not key:
-            raise ValueError("CNPJ inválido para concentração")
-
-        if entity == "cedente" and group_by == "RAIZ_CNPJ":
-            raise ValueError(
-                "Índice de cedente por raiz não configurado"
-            )
-
-        if entity == "sacado" and group_by == "CNPJ":
-            raise ValueError(
-                "Índice de sacado por CNPJ não configurado"
-            )
-
-        current = exposures.get(key, Decimal("0"))
-
-        projected_group = (
-            current + additional_exposure + amount
-        )
-
-        projected_total = (
-            self.total_exposure + additional_total + amount
-        )
-
-        if projected_total <= 0:
-            raise ValueError("Exposição total inválida")
-
-        concentration = (
-            projected_group / projected_total
-        ) * Decimal("100")
-
-        limit = Decimal(str(max_percent))
-
+    def resumo(self):
         return {
-            "approved": concentration <= limit,
-            "group": key,
-            "current_exposure": str(current),
-            "projected_exposure": str(projected_group),
-            "projected_total": str(projected_total),
-            "concentration_percent": str(
-                concentration.quantize(Decimal("0.01"))
-            ),
-            "limit_percent": str(limit),
-        }
-
-    def summary(self):
-        return {
-            "fund_cnpj": self.fund_cnpj,
-            "reference_date": self.reference_date.isoformat(),
-            "total_rows": self.total_rows,
-            "fund_rows": self.fund_rows,
-            "total_exposure": str(self.total_exposure),
-            "sacado_groups": len(self.sacado_exposure),
-            "cedentes": len(self.cedente_exposure),
+            "linhas": self.linhas,
+            "aprovados": self.aprovados,
+            "barrados": self.linhas - self.aprovados,
+            "duplicatas_excluidas": self.duplicatas_excluidas,
+            "valor_nominal": format(self.valor_nominal, ".2f"),
+            "desconto": format(self.desconto, ".2f"),
+            "valor_liquido": format(self.valor_liquido, ".2f"),
         }

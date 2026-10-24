@@ -19,6 +19,8 @@ class ParallelValidationTests(unittest.TestCase):
         amounts = ("100,00", "900,00", "inválido", "50,00", "200,00", "0,00", "100,00")
         rows = [
             parse_row((index + 2, {
+                "NOME_FUNDO": config["fundo"]["nome"],
+                "DOC_FUNDO": config["fundo"]["cnpj"],
                 "DOC_SACADO": "04.252.011/0001-10" if index == 0 else "11.222.333/0001-81",
                 "DOC_CEDENTE": "11.222.333/0001-81",
                 "VALOR_NOMINAL": amount,
@@ -39,10 +41,12 @@ class ParallelValidationTests(unittest.TestCase):
         self.assertEqual(parallel, sequential)
         self.assertEqual([chunk.total for chunk in parallel], [2, 2, 2, 1])
         results = json.loads("[" + ",".join(chunk.content for chunk in parallel) + "]")
-        self.assertEqual([row["row_number"] for row in results], list(range(2, 9)))
-        self.assertTrue(results[0]["validation"]["aprovado"])
-        self.assertFalse(results[1]["validation"]["aprovado"])
-        self.assertIsNone(results[2]["validation"])
+        self.assertEqual([row["linha"] for row in results], list(range(2, 9)))
+        self.assertEqual(results[0]["status"], "APROVADO")
+        self.assertNotIn("barrado_por", results[0])
+        self.assertEqual(results[1]["status"], "BARRADO")
+        self.assertIn("CONCENTRACAO_MAXIMA_SACADO", results[1]["barrado_por"])
+        self.assertEqual(results[2]["barrado_por"], ["ERRO_CSV"])
 
     def test_small_files_do_not_start_a_process_pool(self):
         config = carregar_configuracao(CONFIG_PATH)
