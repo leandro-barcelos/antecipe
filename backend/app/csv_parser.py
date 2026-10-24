@@ -168,14 +168,13 @@ def parse_csv(
                     "O ZIP deve conter exatamente um CSV"
                 )
 
-            with archive.open(csv_files[0]) as binary:
-                with io.TextIOWrapper(
-                    binary, encoding="utf-8-sig",
-                    newline=""
-                ) as stream:
-                    yield from _parse_stream(
-                        stream, parallel, workers, chunk_size
-                    )
+            with archive.open(csv_files[0]) as binary, io.TextIOWrapper(
+                binary, encoding="utf-8-sig",
+                newline=""
+            ) as stream:
+                yield from _parse_stream(
+                    stream, parallel, workers, chunk_size
+                )
 
     else:
         with open(
