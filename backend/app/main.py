@@ -14,8 +14,10 @@ from starlette.background import BackgroundTask
 
 from .config import carregar_configuracao, validar_configuracao
 from .csv_parser import parse_csv
+from .portfolio import Carteira, deduplicar
+from .situacao_cadastral import carregar_situacoes_cadastrais
 from .validation import DEFAULT_CHUNK_SIZE, iter_validated_chunks
-from .validator import ContextoValidacao
+from .validator import ContextoValidacao, FundoHandler
 
 # --------------------------------------------------
 # Configuration
@@ -23,6 +25,7 @@ from .validator import ContextoValidacao
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = BASE_DIR / "data" / "validadores_antecipe.json"
+SITUACOES_CADASTRAIS_PATH = BASE_DIR / "data" / "cnpj_situacao_mock.csv"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("antecipe")
@@ -122,48 +125,51 @@ async def get_validators(active_only: bool = False):
 # Receivables validation
 # --------------------------------------------------
 def _write_validation_response(
-    file_path, response_path, filename, config, *, chunk_size=DEFAULT_CHUNK_SIZE, workers=None
+    file_path, response_path, config, *, chunk_size=DEFAULT_CHUNK_SIZE, workers=None,
+    precificar=False,
 ):
+    situacoes_cadastrais = {}
+    if any(
+        regra["ativo"] and regra["codigo"] == "SITUACAO_CADASTRAL_SACADO"
+        for regra in config["validadores"]
+    ):
+        situacoes_cadastrais = carregar_situacoes_cadastrais(SITUACOES_CADASTRAIS_PATH)
+    fundo = FundoHandler(config["fundo"])
+    database_path = response_path.with_suffix(".sqlite")
     contexto = ContextoValidacao(
-        result.data for result in parse_csv(file_path) if not result.errors
+        (
+            result.data
+            for result in deduplicar(parse_csv(file_path), database_path, fundo)
+            if not result.errors and not result.duplicate and fundo.corresponde(result.data)
+        ),
+        situacoes_cadastrais=situacoes_cadastrais,
     )
-    total = valid = approved = 0
+    carteira = Carteira()
 
     with response_path.open("w", encoding="utf-8") as output:
-        output.write('{"filename":')
-        json.dump(filename, output, ensure_ascii=False)
-        output.write(',"results":[')
+        output.write('{"resultados":[' if precificar else "[")
 
         for chunk in iter_validated_chunks(
-            parse_csv(file_path), config, contexto, chunk_size=chunk_size, workers=workers
+            deduplicar(parse_csv(file_path), database_path, fundo), config, contexto,
+            chunk_size=chunk_size, workers=workers, precificar=precificar,
         ):
-            if total:
+            if carteira.linhas:
                 output.write(",")
             output.write(chunk.content)
-            total += chunk.total
-            valid += chunk.valid
-            approved += chunk.approved
+            carteira.adicionar(chunk)
 
-        output.write("],")
-        summary = {
-            "total": total,
-            "valid": valid,
-            "invalid": total - valid,
-            "approved": approved,
-            "rejected": valid - approved,
-        }
-        output.write(json.dumps(summary)[1:])
+        output.write("]")
+        if precificar:
+            output.write(',"totais":')
+            json.dump(carteira.resumo(), output, ensure_ascii=False)
+            output.write("}")
 
 
-@app.post("/api/validate", tags=["Validation"])
-def validate_receivables(
-    file: UploadFile = File(...),
-    config: str = Form(..., description="Configuração dos validadores em JSON"),
-):
+def _process_receivables(file, config, *, precificar=False):
     try:
         try:
             config = json.loads(config)
-            validar_configuracao(config)
+            validar_configuracao(config, exigir_precificacao=precificar)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -183,7 +189,7 @@ def validate_receivables(
                 copyfileobj(file.file, destination, length=1024 * 1024)
 
             try:
-                _write_validation_response(file_path, response_path, file.filename, config)
+                _write_validation_response(file_path, response_path, config, precificar=precificar)
             except (ValueError, UnicodeError, csv.Error, BadZipFile) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -198,6 +204,22 @@ def validate_receivables(
             raise
     finally:
         file.file.close()
+
+
+@app.post("/api/validate", tags=["Validation"])
+def validate_receivables(
+    file: UploadFile = File(...),
+    config: str = Form(..., description="Configuração dos validadores em JSON"),
+):
+    return _process_receivables(file, config)
+
+
+@app.post("/api/portfolio", tags=["Portfolio"])
+def build_portfolio(
+    file: UploadFile = File(...),
+    config: str = Form(..., description="Configuração dos validadores e precificação em JSON"),
+):
+    return _process_receivables(file, config, precificar=True)
 
 
 # --------------------------------------------------

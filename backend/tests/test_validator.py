@@ -5,8 +5,9 @@ from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
-from backend.app.config import carregar_configuracao
+from backend.app.config import carregar_configuracao, validar_configuracao
 from backend.app.csv_parser import parse_row
+from backend.app.situacao_cadastral import carregar_situacoes_cadastrais
 from backend.app.validator import (
     ContextoValidacao,
     DadosInsuficientesError,
@@ -20,10 +21,13 @@ CNPJ = "04.252.011/0001-10"
 FILIAL = "04.252.011/0002-00"
 OUTRO_CNPJ = "11.222.333/0001-81"
 HOJE = date(2026, 10, 24)
+FUNDO = {"nome": "ANTECIPE FIDC", "cnpj": "92.234.400/0001-80"}
 
 
 def titulo(valor="100", sacado=CNPJ, cedente=OUTRO_CNPJ):
     return {
+        "NOME_FUNDO": FUNDO["nome"],
+        "DOC_FUNDO": FUNDO["cnpj"],
         "DOC_SACADO": sacado,
         "DOC_CEDENTE": cedente,
         "VALOR_NOMINAL": Decimal(valor),
@@ -41,6 +45,7 @@ def executar(handler, recebivel):
 class ConfiguracaoTests(unittest.TestCase):
     def carregar_regra(self, codigo, parametros, ativo=True):
         config = {
+            "fundo": FUNDO,
             "validadores": [
                 {"codigo": codigo, "ativo": ativo, "parametros": parametros}
             ]
@@ -56,7 +61,9 @@ class ConfiguracaoTests(unittest.TestCase):
 
     def test_ignora_regras_inativas(self):
         config = self.carregar_regra("DESCONHECIDO", {}, ativo=False)
-        self.assertEqual(Validator(config).rules, [])
+        validator = Validator(config)
+        self.assertEqual([rule.code for rule in validator.rules], ["FUNDO_VALIDO"])
+        self.assertTrue(validator.executar(titulo())["aprovado"])
 
     def test_rejeita_parametros_de_concentracao_invalidos_ao_carregar(self):
         for codigo in ("CONCENTRACAO_MAXIMA_SACADO", "CONCENTRACAO_MAXIMA_CEDENTE"):
@@ -77,7 +84,26 @@ class ConfiguracaoTests(unittest.TestCase):
                 config = self.carregar_regra(
                     "CONCENTRACAO_MAXIMA_SACADO", {"percentual_maximo": limite}
                 )
-                self.assertEqual(Validator(config).rules[0].group_by, "CNPJ")
+                self.assertEqual(Validator(config).rules[-1].group_by, "CNPJ")
+
+    def test_rejeita_fundo_ausente_nome_vazio_e_cnpj_invalido(self):
+        fundos = (
+            None, [], {}, {"nome": " ", "cnpj": FUNDO["cnpj"]},
+            {"nome": "ANTECIPE FIDC"}, {"nome": "ANTECIPE FIDC", "cnpj": 92234400000180},
+            {"nome": "ANTECIPE FIDC", "cnpj": "92.234.400/0001-81"},
+        )
+        for fundo in fundos:
+            with self.subTest(fundo=fundo):
+                with self.assertRaises(ValueError):
+                    validar_configuracao({"fundo": fundo, "validadores": []})
+        with self.assertRaises(ValueError):
+            validar_configuracao({"validadores": []})
+
+    def test_aceita_cnpj_do_fundo_sem_pontuacao(self):
+        validar_configuracao({
+            "fundo": {"nome": FUNDO["nome"], "cnpj": "92234400000180"},
+            "validadores": [],
+        })
 
 
 class SituacaoCadastralTests(unittest.TestCase):
@@ -104,6 +130,25 @@ class SituacaoCadastralTests(unittest.TestCase):
     def test_filial_exige_sua_propria_situacao(self):
         with self.assertRaises(DadosInsuficientesError):
             executar(self.handler({CNPJ: "ATIVA"}), titulo(sacado=FILIAL))
+
+    def test_carrega_csv_com_bom_e_normaliza_documento_e_situacao(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "situacoes.csv"
+            path.write_text(
+                f"\ufeffDOC;SITUACAO_CADASTRAL\n{CNPJ}; ativa \n{OUTRO_CNPJ};\n",
+                encoding="utf-8",
+            )
+            handler = self.handler(carregar_situacoes_cadastrais(path))
+        self.assertTrue(executar(handler, titulo(sacado="04252011000110")))
+        with self.assertRaises(DadosInsuficientesError):
+            executar(handler, titulo(sacado=OUTRO_CNPJ))
+
+    def test_rejeita_base_cadastral_sem_colunas_obrigatorias(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "situacoes.csv"
+            path.write_text("CNPJ;STATUS\n", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "DOC e SITUACAO_CADASTRAL"):
+                carregar_situacoes_cadastrais(path)
 
 
 class ConcentracaoTests(unittest.TestCase):
@@ -191,7 +236,7 @@ class ValidatorTests(unittest.TestCase):
         validator = Validator(self.config, contexto)
         resultado = validator.executar(parsed.data)
         ativos = [r["codigo"] for r in self.config["validadores"] if r["ativo"]]
-        self.assertEqual([r.code for r in validator.rules], ativos)
+        self.assertEqual([r.code for r in validator.rules], ["FUNDO_VALIDO", *ativos])
         por_codigo = {r["codigo"]: r for r in resultado["resultados"]}
         for codigo in ativos:
             self.assertIs(

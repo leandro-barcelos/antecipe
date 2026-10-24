@@ -32,6 +32,8 @@ class ParseResult:
     row_number: int
     data: Optional[dict]
     errors: list[str]
+    document_id: str = ""
+    duplicate: bool = False
 
 
 def parse_money(value: str) -> Decimal:
@@ -85,6 +87,7 @@ def parse_row(item: tuple[int, dict]) -> ParseResult:
         row_number=row_number,
         data=data if not errors else None,
         errors=errors,
+        document_id=data["NU_DOCUMENTO"],
     )
 
 
