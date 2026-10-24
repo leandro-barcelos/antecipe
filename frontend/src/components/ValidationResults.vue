@@ -62,7 +62,7 @@ function formatReason(reason) {
 </script>
 
 <template>
-  <div class="w-full space-y-6">
+  <div class="results-dashboard w-full space-y-6">
 
     <!-- Summary -->
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
