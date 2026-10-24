@@ -82,39 +82,87 @@ const file = ref(null)
 const loading = ref(false)
 const error = ref('')
 const result = ref(null)
-const config = ref(defaultConfig)
+const config = ref(JSON.parse(JSON.stringify(defaultConfig)))
 const configDialog = ref(null)
-const configDraft = ref('')
+const configDraft = ref(JSON.parse(JSON.stringify(defaultConfig)))
 const configError = ref('')
 const activeValidatorCount = computed(() =>
-  Array.isArray(config.value.validadores)
-    ? config.value.validadores.filter(validator => validator?.ativo).length
+  Array.isArray(configDraft.value?.validadores)
+    ? configDraft.value.validadores.filter(validator => validator.ativo).length
     : 0
 )
 
 function openConfigModal() {
-  configDraft.value = JSON.stringify(config.value, null, 2)
+  configDraft.value = JSON.parse(JSON.stringify(config.value))
   configError.value = ''
   configDialog.value?.showModal()
 }
 
 function saveConfiguration() {
-  let parsedConfig
-
-  try {
-    parsedConfig = JSON.parse(configDraft.value)
-  } catch {
-    configError.value = 'JSON inválido. Corrija a sintaxe antes de salvar.'
+  if (
+    !Array.isArray(configDraft.value?.validadores) ||
+    configDraft.value.validadores.some(
+      validator => !validator || typeof validator.ativo !== 'boolean'
+    )
+  ) {
+    configError.value = 'Não foi possível validar os critérios. Feche e abra novamente.'
     return
   }
 
-  if (!parsedConfig || typeof parsedConfig !== 'object' || Array.isArray(parsedConfig)) {
-    configError.value = 'A configuração deve ser um objeto JSON.'
+  const invalidPricingValue = Object.entries(defaultConfig.precificacao).some(
+    ([key, defaultValue]) =>
+      typeof defaultValue === 'number' &&
+      (typeof configDraft.value.precificacao?.[key] !== 'number' ||
+        !Number.isFinite(configDraft.value.precificacao[key]) ||
+        configDraft.value.precificacao[key] < 0 ||
+        (isPercentageParameter(key) &&
+          configDraft.value.precificacao[key] > 100))
+  )
+  const invalidValidatorValue = configDraft.value.validadores.some(validator => {
+    const defaultValidator = defaultConfig.validadores.find(
+      item => item.codigo === validator.codigo
+    )
+
+    return Object.entries(defaultValidator?.parametros ?? {}).some(
+      ([key, defaultValue]) =>
+        typeof defaultValue === 'number' &&
+        (typeof validator.parametros?.[key] !== 'number' ||
+          !Number.isFinite(validator.parametros[key]) ||
+          validator.parametros[key] < 0 ||
+          (isPercentageParameter(key) && validator.parametros[key] > 100))
+    )
+  })
+
+  if (invalidPricingValue || invalidValidatorValue) {
+    configError.value =
+      'Preencha os campos numéricos com valores válidos. Percentuais devem ficar entre 0 e 100.'
     return
   }
 
-  config.value = parsedConfig
+  config.value = JSON.parse(JSON.stringify(configDraft.value))
   configDialog.value?.close()
+}
+
+function formatParameters(parameters) {
+  return Object.entries(parameters ?? {})
+    .filter(([, value]) => typeof value !== 'number')
+    .map(([key, value]) => {
+      const formattedValue = Array.isArray(value) ? value.join(', ') : value
+      return `${key.replaceAll('_', ' ')}: ${formattedValue}`
+    })
+    .join(' · ')
+}
+
+function formatParameterLabel(key) {
+  return key.replaceAll('_', ' ')
+}
+
+function isPercentageParameter(key) {
+  return key.includes('percentual')
+}
+
+function parameterStep(key) {
+  return key.endsWith('_dias') || key === 'base_dias' ? 1 : 'any'
 }
 
 function handleFile(event) {
@@ -258,28 +306,98 @@ async function uploadFile() {
         </div>
 
         <p class="config-description">
-          Revise ou edite o JSON. As alterações serão usadas no próximo envio.
+          Ative ou desative os critérios que serão usados na validação.
         </p>
 
         <div class="config-summary">
           <span class="config-status-dot"></span>
-          Na configuração salva: {{ activeValidatorCount }} validadores ativos
+          {{ activeValidatorCount }} de {{ configDraft?.validadores?.length ?? 0 }} validadores ativos
         </div>
 
-        <label class="config-editor-label" for="config-json">Configuração em JSON</label>
-        <textarea
-          id="config-json"
-          v-model="configDraft"
-          class="config-editor"
-          spellcheck="false"
-          autocapitalize="off"
-          autocomplete="off"
-          autocorrect="off"
-          :aria-describedby="configError ? 'config-help config-error' : 'config-help'"
-        ></textarea>
-        <p id="config-help" class="config-help">
-          Informe um objeto JSON válido para atualizar a configuração.
-        </p>
+        <div class="config-fund-summary">
+          <div>
+            <span>Fundo</span>
+            <strong>{{ configDraft?.fundo?.nome }}</strong>
+          </div>
+          <div>
+            <span>Precificação · {{ configDraft?.precificacao?.metodo?.replaceAll('_', ' ') }}</span>
+            <label class="pricing-number-field">
+              <span class="mx-2">Taxa mensal (%)</span>
+              <input
+                v-model.number="configDraft.precificacao.taxa_mensal_percentual"
+                type="number"
+                min="0"
+                max="100"
+                step="any"
+                aria-label="Taxa mensal da precificação em percentual"
+              />
+            </label>
+            <label class="pricing-number-field ">
+              <span class="mx-2">Base de dias</span>
+              <input
+                v-model.number="configDraft.precificacao.base_dias"
+                type="number"
+                min="0"
+                step="1"
+                aria-label="Base de dias da precificação"
+              />
+            </label>
+          </div>
+        </div>
+
+        <fieldset class="validator-list">
+          <legend class="config-editor-label">Critérios de validação</legend>
+          <div
+            v-for="(validator, index) in configDraft?.validadores ?? []"
+            :key="validator.codigo"
+            class="validator-row"
+            :class="{ 'validator-row--inactive': !validator.ativo }"
+          >
+            <div class="validator-copy">
+              <strong>{{ validator.codigo.replaceAll('_', ' ') }}</strong>
+              <span v-if="formatParameters(validator.parametros)">
+                {{ formatParameters(validator.parametros) }}
+              </span>
+              <div
+                v-if="Object.values(validator.parametros ?? {}).some(value => typeof value === 'number')"
+                class="validator-number-fields"
+              >
+                <template
+                  v-for="(value, key) in validator.parametros"
+                  :key="key"
+                >
+                  <label
+                    v-if="typeof value === 'number'"
+                    class="validator-number-field"
+                  >
+                    <span>{{ formatParameterLabel(key) }}</span>
+                    <input
+                      v-model.number="validator.parametros[key]"
+                      type="number"
+                      min="0"
+                      :max="isPercentageParameter(key) ? 100 : undefined"
+                      :step="parameterStep(key)"
+                      :aria-label="`${formatParameterLabel(key)} para ${validator.codigo.replaceAll('_', ' ')}`"
+                    />
+                  </label>
+                </template>
+              </div>
+            </div>
+            <input
+              v-model="validator.ativo"
+              type="checkbox"
+              :aria-label="`Ativar ${validator.codigo.replaceAll('_', ' ')}`"
+              :aria-describedby="`validator-state-${index}`"
+            />
+            <span
+              :id="`validator-state-${index}`"
+              class="validator-state"
+            >
+              {{ validator.ativo ? 'Ativo' : 'Inativo' }}
+            </span>
+          </div>
+        </fieldset>
+
         <p
           v-if="configError"
           id="config-error"
@@ -297,7 +415,7 @@ async function uploadFile() {
           >
             Cancelar
           </button>
-          <button class="config-save" type="submit">Salvar configuração</button>
+          <button class="config-save" type="submit">Salvar critérios</button>
         </div>
       </form>
     </dialog>
