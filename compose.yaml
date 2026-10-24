@@ -6,6 +6,7 @@ services:
       - "${BACKEND_PORT:-8000}:8000"
     environment:
       TZ: America/Sao_Paulo
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     healthcheck:
       test:
         - CMD

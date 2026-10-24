@@ -20,6 +20,7 @@ from .database import DEFAULT_CHUNK_SIZE, ReceivablesDatabase
 from .portfolio import precificar_aprovados, resumo
 from .situacao_cadastral import carregar_situacoes_cadastrais
 from .validation import data_operacao, validar_base
+from .logging_config import RequestLoggingMiddleware, configure_logging, log_event, phase
 
 # --------------------------------------------------
 # Configuration
@@ -29,8 +30,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = BASE_DIR / "data" / "validadores_antecipe.json"
 SITUACOES_CADASTRAIS_PATH = BASE_DIR / "data" / "cnpj_situacao_mock.csv"
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("antecipe")
+configure_logging()
 
 
 # --------------------------------------------------
@@ -41,25 +41,35 @@ logger = logging.getLogger("antecipe")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
-    logger.info("Iniciando Antecipe API...")
+    log_event("service_starting")
 
     if not CONFIG_PATH.exists():
         raise RuntimeError(f"Arquivo de configuração não encontrado: {CONFIG_PATH}")
 
-    app.state.config = carregar_configuracao(CONFIG_PATH)
+    try:
+        app.state.config = carregar_configuracao(CONFIG_PATH)
+    except Exception:
+        log_event("service_failed", level=logging.ERROR)
+        raise
 
-    logger.info("Configuração carregada com sucesso.")
+    log_event("service_ready")
 
-    yield
-
-    logger.info("Encerrando Antecipe API...")
+    try:
+        yield
+    finally:
+        log_event("service_stopped")
 
 
 # --------------------------------------------------
 # FastAPI application
 # --------------------------------------------------
 
-app = FastAPI(
+class LoggedFastAPI(FastAPI):
+    async def __call__(self, scope, receive, send):
+        await RequestLoggingMiddleware(super().__call__)(scope, receive, send)
+
+
+app = LoggedFastAPI(
     title="Antecipe API",
     description=("API para validação de elegibilidade e precificação de recebíveis."),
     version="1.0.0",
@@ -82,6 +92,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID"],
 )
 
 
@@ -138,21 +149,29 @@ def _write_validation_response(
     reference = data_referencia if data_referencia is not None else data_operacao()
     try:
         with ReceivablesDatabase(response_path.with_suffix(".sqlite")) as database:
-            database.import_rows(
-                parse_csv(file_path), chunk_size=chunk_size
-            )
+            with phase("importacao"):
+                database.import_rows(parse_csv(file_path), chunk_size=chunk_size)
             if any(
                 regra["ativo"] and regra["codigo"] == "SITUACAO_CADASTRAL_SACADO"
                 for regra in config["validadores"]
             ):
-                database.import_statuses(
-                    carregar_situacoes_cadastrais(SITUACOES_CADASTRAIS_PATH)
-                )
-            validar_base(database, config, data_referencia=reference)
+                with phase("cadastro"):
+                    database.import_statuses(
+                        carregar_situacoes_cadastrais(SITUACOES_CADASTRAIS_PATH)
+                    )
+            with phase("validacao"):
+                validar_base(database, config, data_referencia=reference)
             if precificar:
-                precificar_aprovados(database, config, chunk_size=chunk_size)
+                with phase("precificacao"):
+                    precificar_aprovados(database, config, chunk_size=chunk_size)
             totals = resumo(database) if precificar else None
-            with response_path.open("w", encoding="utf-8") as output:
+            counts = database.connection.execute('''SELECT COUNT(*) AS linhas,
+                COALESCE(SUM(aprovado),0) AS aprovados,
+                COUNT(*)-COALESCE(SUM(aprovado),0) AS barrados,
+                COALESCE(SUM(duplicado_de IS NOT NULL),0) AS duplicatas_excluidas
+                FROM recebiveis''').fetchone()
+            log_event("processing_summary", **dict(counts))
+            with phase("exportacao"), response_path.open("w", encoding="utf-8") as output:
                 output.write('{"resultados":[' if precificar else "[")
                 first = True
                 for record in database.iter_records(
@@ -194,7 +213,12 @@ class TemporaryFileResponse(FileResponse):
             await super().__call__(scope, receive, send)
         finally:
             with CancelScope(shield=True):
-                await run_in_threadpool(self.temporary.cleanup)
+                await run_in_threadpool(_cleanup_temporary, self.temporary)
+
+
+def _cleanup_temporary(temporary):
+    with phase("limpeza"):
+        temporary.cleanup()
 
 
 def _process_receivables(file, config, *, precificar=True):
@@ -230,7 +254,7 @@ def _process_receivables(file, config, *, precificar=True):
             file_path.unlink()
             return TemporaryFileResponse(response_path, temporary)
         except BaseException:
-            temporary.cleanup()
+            _cleanup_temporary(temporary)
             raise
     finally:
         file.file.close()

@@ -16,4 +16,4 @@ COPY data/validadores_antecipe.json data/cnpj_situacao_mock.csv ./data/
 USER antecipe
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "app.server"]
