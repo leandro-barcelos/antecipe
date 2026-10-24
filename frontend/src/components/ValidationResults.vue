@@ -94,6 +94,12 @@ function setFilter(value) {
 function formatReason(reason) {
   return reason.replaceAll('_', ' ')
 }
+
+function formatMoney(value) {
+  if (value === null || value === undefined || value === '') return '—'
+  const [integer, cents = '00'] = String(value).split('.')
+  return `R$ ${integer.replace(/\B(?=(\d{3})+(?!\d))/g, '.')},${cents.padEnd(2, '0')}`
+}
 </script>
 
 <template>
@@ -206,6 +212,8 @@ function formatReason(reason) {
             <tr>
               <th class="px-5 py-4">Linha</th>
               <th class="px-5 py-4">ID do documento</th>
+              <th class="px-5 py-4 text-right">Valor nominal</th>
+              <th class="px-5 py-4 text-right">Valor líquido</th>
               <th class="px-5 py-4">Status</th>
               <th class="px-5 py-4">Motivo</th>
             </tr>
@@ -223,6 +231,13 @@ function formatReason(reason) {
 
               <td class="px-5 py-4 font-medium text-gray-900">
                 {{ record.id }}
+              </td>
+
+              <td class="whitespace-nowrap px-5 py-4 text-right tabular-nums">
+                {{ formatMoney(record.valor_nominal) }}
+              </td>
+              <td class="whitespace-nowrap px-5 py-4 text-right tabular-nums">
+                {{ formatMoney(record.valor_liquido) }}
               </td>
 
               <td class="px-5 py-4">
@@ -258,7 +273,7 @@ function formatReason(reason) {
             </tr>
 
             <tr v-if="!paginatedResults.length">
-              <td colspan="4" class="px-5 py-10 text-center text-gray-500">
+              <td colspan="6" class="px-5 py-10 text-center text-gray-500">
                 Nenhum registro encontrado.
               </td>
             </tr>
