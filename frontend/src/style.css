@@ -877,6 +877,92 @@ a {
   background-color: var(--brand-green);
 }
 
+.money-chart {
+  padding: clamp(20px, 3vw, 28px);
+  border: 1px solid var(--brand-line);
+  border-radius: 5px;
+  background: var(--brand-paper);
+  box-shadow: 0 8px 22px rgba(57, 51, 35, .04);
+}
+
+.money-chart__heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 26px;
+}
+
+.money-chart__heading .section-kicker {
+  margin: 0 0 7px;
+}
+
+.money-chart__heading h2 {
+  margin: 0;
+  color: var(--brand-ink);
+  font-family: "VinilaExtendedLight", Arial, sans-serif;
+  font-size: clamp(1.35rem, 3vw, 1.75rem);
+  font-weight: 400;
+  letter-spacing: -.04em;
+}
+
+.money-chart__unit {
+  color: var(--brand-muted);
+  font-size: 11px;
+}
+
+.money-chart__bars {
+  display: grid;
+  gap: 20px;
+}
+
+.money-chart__row {
+  min-width: 0;
+}
+
+.money-chart__labels {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+  color: #55574f;
+  font-size: 12px;
+}
+
+.money-chart__labels strong {
+  color: var(--brand-ink);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.money-chart__track {
+  height: 14px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: #eeeadd;
+}
+
+.money-chart__bar {
+  height: 100%;
+  min-width: 0;
+  border-radius: inherit;
+  transition: width .35s ease;
+}
+
+.money-chart__row--approved-nominal .money-chart__bar {
+  background: #075343;
+}
+
+.money-chart__row--approved-liquid .money-chart__bar {
+  background: #6d9c77;
+}
+
+.money-chart__row--rejected-nominal .money-chart__bar {
+  background: #bd7765;
+}
+
 @media (max-width: 600px) {
   .site-header {
     min-height: 62px;
@@ -936,6 +1022,23 @@ a {
     align-items: flex-start;
     flex-direction: column;
     gap: 12px;
+  }
+
+  .money-chart__heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+
+  .money-chart__bars {
+    gap: 17px;
+  }
+
+  .money-chart__labels {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
   }
 
   .site-footer {

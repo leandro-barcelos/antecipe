@@ -45,16 +45,45 @@ const monetaryTotals = computed(() => {
   const rejectedRows = props.results.filter(r => r.status === 'BARRADO')
 
   return {
-    approvedNominal: formatCurrency(
-      approvedRows.reduce((total, row) => total + toCents(row.valor_nominal), 0)
+    approvedNominal: approvedRows.reduce(
+      (total, row) => total + toCents(row.valor_nominal),
+      0
     ),
-    approvedLiquid: formatCurrency(
-      approvedRows.reduce((total, row) => total + toCents(row.valor_liquido), 0)
+    approvedLiquid: approvedRows.reduce(
+      (total, row) => total + toCents(row.valor_liquido),
+      0
     ),
-    rejectedNominal: formatCurrency(
-      rejectedRows.reduce((total, row) => total + toCents(row.valor_nominal), 0)
+    rejectedNominal: rejectedRows.reduce(
+      (total, row) => total + toCents(row.valor_nominal),
+      0
     )
   }
+})
+
+const monetaryChart = computed(() => {
+  const values = [
+    {
+      key: 'approved-nominal',
+      label: 'Valor nominal aprovado',
+      value: monetaryTotals.value.approvedNominal
+    },
+    {
+      key: 'approved-liquid',
+      label: 'Valor líquido aprovado',
+      value: monetaryTotals.value.approvedLiquid
+    },
+    {
+      key: 'rejected-nominal',
+      label: 'Valor nominal barrado',
+      value: monetaryTotals.value.rejectedNominal
+    }
+  ]
+  const maximum = Math.max(...values.map(item => item.value), 0)
+
+  return values.map(item => ({
+    ...item,
+    width: maximum > 0 ? (item.value / maximum) * 100 : 0
+  }))
 })
 
 const approvalRate = computed(() =>
@@ -105,26 +134,35 @@ function formatMoney(value) {
 <template>
   <div class="results-dashboard w-full space-y-6">
 
-    <section aria-label="Totais financeiros" class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-      <div class="rounded-xl border border-gray-200 bg-white p-5">
-        <p class="text-sm text-gray-500">Valor nominal aprovado</p>
-        <p class="mt-2 text-2xl font-bold text-gray-900">
-          {{ monetaryTotals.approvedNominal }}
-        </p>
+    <section class="money-chart" aria-label="Gráfico de totais financeiros">
+      <div class="money-chart__heading">
+        <div>
+          <p class="section-kicker">RESUMO FINANCEIRO</p>
+          <h2>Totais da carteira</h2>
+        </div>
+        <span class="money-chart__unit">Valores em R$</span>
       </div>
 
-      <div class="rounded-xl border border-green-200 bg-green-50 p-5">
-        <p class="text-sm text-green-700">Valor líquido aprovado</p>
-        <p class="mt-2 text-2xl font-bold text-green-700">
-          {{ monetaryTotals.approvedLiquid }}
-        </p>
-      </div>
-
-      <div class="rounded-xl border border-red-200 bg-red-50 p-5">
-        <p class="text-sm text-red-700">Valor nominal barrado</p>
-        <p class="mt-2 text-2xl font-bold text-red-700">
-          {{ monetaryTotals.rejectedNominal }}
-        </p>
+      <div class="money-chart__bars">
+        <div
+          v-for="item in monetaryChart"
+          :key="item.key"
+          class="money-chart__row"
+          :class="`money-chart__row--${item.key}`"
+        >
+          <div class="money-chart__labels">
+            <span>{{ item.label }}</span>
+            <strong>{{ formatCurrency(item.value) }}</strong>
+          </div>
+          <div class="money-chart__track">
+            <div
+              class="money-chart__bar"
+              :style="{ width: `${item.width}%` }"
+              role="img"
+              :aria-label="`${item.label}: ${formatCurrency(item.value)}`"
+            ></div>
+          </div>
+        </div>
       </div>
     </section>
 
