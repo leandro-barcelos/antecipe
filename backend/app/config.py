@@ -4,7 +4,7 @@ from decimal import Decimal, InvalidOperation
 from validate_docbr import CNPJ
 
 from .pricing import validar_precificacao
-from .validator import HandlerFactory
+from .validator import RULES
 
 
 def validar_configuracao(config, *, exigir_precificacao=False):
@@ -38,7 +38,7 @@ def validar_configuracao(config, *, exigir_precificacao=False):
             continue
 
         codigo = regra["codigo"]
-        if codigo not in HandlerFactory.handlers:
+        if codigo not in RULES:
             raise ValueError(f"Validador não suportado: {codigo}")
 
         parametros = regra["parametros"]

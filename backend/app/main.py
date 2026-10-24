@@ -1,23 +1,25 @@
 import csv
 import json
 import logging
+import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 from shutil import copyfileobj
 from tempfile import TemporaryDirectory
 from zipfile import BadZipFile
 
+from anyio import CancelScope
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 
 from .config import carregar_configuracao, validar_configuracao
 from .csv_parser import parse_csv
-from .portfolio import Carteira, deduplicar
+from .database import DEFAULT_CHUNK_SIZE, ReceivablesDatabase
+from .portfolio import precificar_aprovados, resumo
 from .situacao_cadastral import carregar_situacoes_cadastrais
-from .validation import DEFAULT_CHUNK_SIZE, iter_validated_chunks
-from .validator import ContextoValidacao, FundoHandler
+from .validation import data_operacao, validar_base
 
 # --------------------------------------------------
 # Configuration
@@ -125,47 +127,77 @@ async def get_validators(active_only: bool = False):
 # Receivables validation
 # --------------------------------------------------
 def _write_validation_response(
-    file_path, response_path, config, *, chunk_size=DEFAULT_CHUNK_SIZE, workers=None,
-    precificar=False,
+    file_path,
+    response_path,
+    config,
+    *,
+    chunk_size=DEFAULT_CHUNK_SIZE,
+    precificar=True,
+    data_referencia=None,
 ):
-    situacoes_cadastrais = {}
-    if any(
-        regra["ativo"] and regra["codigo"] == "SITUACAO_CADASTRAL_SACADO"
-        for regra in config["validadores"]
-    ):
-        situacoes_cadastrais = carregar_situacoes_cadastrais(SITUACOES_CADASTRAIS_PATH)
-    fundo = FundoHandler(config["fundo"])
-    database_path = response_path.with_suffix(".sqlite")
-    contexto = ContextoValidacao(
-        (
-            result.data
-            for result in deduplicar(parse_csv(file_path), database_path, fundo)
-            if not result.errors and not result.duplicate and fundo.corresponde(result.data)
-        ),
-        situacoes_cadastrais=situacoes_cadastrais,
-    )
-    carteira = Carteira()
+    reference = data_referencia if data_referencia is not None else data_operacao()
+    try:
+        with ReceivablesDatabase(response_path.with_suffix(".sqlite")) as database:
+            database.import_rows(
+                parse_csv(file_path), config["fundo"], chunk_size=chunk_size
+            )
+            if any(
+                regra["ativo"] and regra["codigo"] == "SITUACAO_CADASTRAL_SACADO"
+                for regra in config["validadores"]
+            ):
+                database.import_statuses(
+                    carregar_situacoes_cadastrais(SITUACOES_CADASTRAIS_PATH)
+                )
+            validar_base(database, config, data_referencia=reference)
+            if precificar:
+                precificar_aprovados(database, config, chunk_size=chunk_size)
+            totals = resumo(database) if precificar else None
+            with response_path.open("w", encoding="utf-8") as output:
+                output.write('{"resultados":[' if precificar else "[")
+                first = True
+                for record in database.iter_records(
+                    precificar=precificar, chunk_size=chunk_size
+                ):
+                    if not first:
+                        output.write(",")
+                    output.write(
+                        json.dumps(
+                            record,
+                            ensure_ascii=False,
+                            allow_nan=False,
+                            separators=(",", ":"),
+                        )
+                    )
+                    first = False
+                output.write("]")
+                if precificar:
+                    output.write(',"totais":')
+                    json.dump(totals, output, ensure_ascii=False)
+                    output.write("}")
+    except sqlite3.OperationalError as exc:
+        if "integer overflow" in str(exc).lower():
+            raise ValueError(
+                "Soma financeira excede o limite de centavos de 64 bits"
+            ) from exc
+        raise
 
-    with response_path.open("w", encoding="utf-8") as output:
-        output.write('{"resultados":[' if precificar else "[")
 
-        for chunk in iter_validated_chunks(
-            deduplicar(parse_csv(file_path), database_path, fundo), config, contexto,
-            chunk_size=chunk_size, workers=workers, precificar=precificar,
-        ):
-            if carteira.linhas:
-                output.write(",")
-            output.write(chunk.content)
-            carteira.adicionar(chunk)
+class TemporaryFileResponse(FileResponse):
+    """Clean up also when transmission is interrupted or send() raises."""
 
-        output.write("]")
-        if precificar:
-            output.write(',"totais":')
-            json.dump(carteira.resumo(), output, ensure_ascii=False)
-            output.write("}")
+    def __init__(self, path, temporary):
+        super().__init__(path, media_type="application/json")
+        self.temporary = temporary
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            with CancelScope(shield=True):
+                await run_in_threadpool(self.temporary.cleanup)
 
 
-def _process_receivables(file, config, *, precificar=False):
+def _process_receivables(file, config, *, precificar=True):
     try:
         try:
             config = json.loads(config)
@@ -189,16 +221,14 @@ def _process_receivables(file, config, *, precificar=False):
                 copyfileobj(file.file, destination, length=1024 * 1024)
 
             try:
-                _write_validation_response(file_path, response_path, config, precificar=precificar)
+                _write_validation_response(
+                    file_path, response_path, config, precificar=precificar
+                )
             except (ValueError, UnicodeError, csv.Error, BadZipFile) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
             file_path.unlink()
-            return FileResponse(
-                response_path,
-                media_type="application/json",
-                background=BackgroundTask(temporary.cleanup),
-            )
+            return TemporaryFileResponse(response_path, temporary)
         except BaseException:
             temporary.cleanup()
             raise
@@ -209,17 +239,10 @@ def _process_receivables(file, config, *, precificar=False):
 @app.post("/api/validate", tags=["Validation"])
 def validate_receivables(
     file: UploadFile = File(...),
-    config: str = Form(..., description="Configuração dos validadores em JSON"),
-):
-    return _process_receivables(file, config)
-
-
-@app.post("/api/portfolio", tags=["Portfolio"])
-def build_portfolio(
-    file: UploadFile = File(...),
     config: str = Form(..., description="Configuração dos validadores e precificação em JSON"),
+    precificar: bool = True,
 ):
-    return _process_receivables(file, config, precificar=True)
+    return _process_receivables(file, config, precificar=precificar)
 
 
 # --------------------------------------------------

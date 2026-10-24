@@ -1,15 +1,15 @@
 
 import csv
 import io
-import os
 import zipfile
 
-from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Optional
+
+from .validator import MAX_MONEY
 
 
 REQUIRED_COLUMNS = [
@@ -33,7 +33,6 @@ class ParseResult:
     data: Optional[dict]
     errors: list[str]
     document_id: str = ""
-    duplicate: bool = False
 
 
 def parse_money(value: str) -> Decimal:
@@ -46,6 +45,11 @@ def parse_money(value: str) -> Decimal:
 
     if not amount.is_finite() or amount < 0:
         raise ValueError("Valor nominal inválido")
+
+    if amount > MAX_MONEY:
+        raise ValueError("Valor nominal excede o limite de centavos de 64 bits")
+    if amount != amount.quantize(Decimal("0.01")):
+        raise ValueError("Valor nominal deve ser um número inteiro de centavos")
 
     return amount
 
@@ -111,8 +115,6 @@ def _read_chunks(reader, chunk_size):
 
 def _parse_stream(
     stream,
-    parallel=False,
-    workers=None,
     chunk_size=5000,
 ):
     reader = csv.DictReader(stream, delimiter=";")
@@ -129,25 +131,12 @@ def _parse_stream(
 
     chunks = _read_chunks(reader, chunk_size)
 
-    if parallel:
-        worker_count = workers or min(os.cpu_count() or 1, 4)
-
-        with ProcessPoolExecutor(
-            max_workers=worker_count
-        ) as executor:
-            for results in executor.map(
-                _process_chunk, chunks
-            ):
-                yield from results
-    else:
-        for chunk in chunks:
-            yield from _process_chunk(chunk)
+    for chunk in chunks:
+        yield from _process_chunk(chunk)
 
 
 def parse_csv(
     file_path,
-    parallel=False,
-    workers=None,
     chunk_size=5000,
 ):
     """
@@ -176,7 +165,7 @@ def parse_csv(
                 newline=""
             ) as stream:
                 yield from _parse_stream(
-                    stream, parallel, workers, chunk_size
+                    stream, chunk_size
                 )
 
     else:
@@ -184,5 +173,5 @@ def parse_csv(
             path, "r", encoding="utf-8-sig", newline=""
         ) as stream:
             yield from _parse_stream(
-                stream, parallel, workers, chunk_size
+                stream, chunk_size
             )

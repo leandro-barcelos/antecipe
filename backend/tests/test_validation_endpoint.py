@@ -8,10 +8,12 @@ import zipfile
 from decimal import Decimal
 from functools import partial
 from pathlib import Path
+import tempfile
 from unittest.mock import patch
 
 from backend.app.csv_parser import REQUIRED_COLUMNS, ParseResult
-from backend.app.main import _write_validation_response, app
+from backend.app.main import TemporaryFileResponse, _write_validation_response, app
+from starlette.requests import ClientDisconnect
 from backend.app.situacao_cadastral import carregar_situacoes_cadastrais
 
 
@@ -45,7 +47,7 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
             })
         return stream.getvalue().encode("utf-8")
 
-    async def request(self, config, filename="estoque.csv", content=None, path="/api/validate"):
+    async def request(self, config, filename="estoque.csv", content=None, path="/api/validate", precificar=False):
         # Exercise the ASGI multipart request without an external HTTP client.
         boundary = "antecipe-test-boundary"
         parts = []
@@ -79,7 +81,9 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
         await app({
             "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
             "method": "POST", "scheme": "http", "path": path,
-            "raw_path": path.encode(), "query_string": b"", "root_path": "",
+            "raw_path": path.encode(),
+            "query_string": b"" if precificar is None else f"precificar={str(precificar).lower()}".encode(),
+            "root_path": "",
             "headers": [
                 (b"content-type", f"multipart/form-data; boundary={boundary}".encode()),
                 (b"content-length", str(len(body)).encode()),
@@ -127,7 +131,7 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
             {"linha": 4, "id": "000000003", "status": "BARRADO", "barrado_por": ["ERRO_CSV"]},
         ])
 
-    async def test_two_passes_do_not_retain_rows_and_clean_up_files_after_response(self):
+    async def test_single_import_does_not_retain_rows_and_cleans_up_files_after_response(self):
         class RowData(dict):
             pass
 
@@ -152,7 +156,7 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch("backend.app.main.parse_csv", side_effect=parse_incrementally),
             patch("backend.app.main._write_validation_response", side_effect=partial(
-                _write_validation_response, chunk_size=2, workers=1
+                _write_validation_response, chunk_size=2
             )),
         ):
             status, result = await self.request(json.dumps(self.config))
@@ -160,14 +164,13 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 200)
         self.assertEqual(len(result), 100)
         self.assertTrue(all(row["status"] == "APROVADO" for row in result))
-        self.assertEqual(len(paths), 2)
-        self.assertEqual(paths[0], paths[1])
+        self.assertEqual(len(paths), 1)
         self.assertFalse(paths[0].parent.exists())
         self.assertTrue(all(ref() is None for ref in references))
 
-    async def test_parallel_blocks_preserve_response_order_and_counts(self):
+    async def test_sql_batches_preserve_response_order_and_counts(self):
         with patch("backend.app.main._write_validation_response", side_effect=partial(
-            _write_validation_response, chunk_size=2, workers=2
+            _write_validation_response, chunk_size=2
         )):
             status, result = await self.request(json.dumps(self.config))
 
@@ -178,7 +181,7 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
             {"linha": 4, "id": "000000003", "status": "BARRADO", "barrado_por": ["ERRO_CSV"]},
         ])
 
-    async def test_fund_is_mandatory_and_normalized_in_sequential_and_parallel_validation(self):
+    async def test_fund_is_mandatory_and_normalized_with_different_batches(self):
         for rule in self.config["validadores"]:
             rule["ativo"] = False
         fund = self.config["fundo"]
@@ -195,11 +198,11 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
         ]
         for index in (0, len(funds) - 1):
             expected[index] = {"linha": index + 2, "id": f"{index + 1:09d}", "status": "APROVADO"}
-        for workers in (1, 2):
+        for batch_size in (1, 2):
             with (
-                self.subTest(workers=workers),
+                self.subTest(batch_size=batch_size),
                 patch("backend.app.main._write_validation_response", side_effect=partial(
-                    _write_validation_response, chunk_size=2, workers=workers
+                    _write_validation_response, chunk_size=batch_size
                 )),
             ):
                 status, result = await self.request(json.dumps(self.config), content=content)
@@ -231,20 +234,18 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
         status, _ = await self.request(json.dumps(config))
         self.assertEqual(status, 400)
 
-    async def test_second_pass_errors_return_400_and_remove_temporary_files(self):
+    async def test_import_errors_return_400_and_remove_temporary_files(self):
         paths = []
 
-        def fail_on_second_pass(path):
+        def fail_import(path):
             paths.append(path)
-            if len(paths) == 2:
-                raise csv.Error("Erro na segunda passagem")
-            return iter(())
+            raise csv.Error("Erro na importação")
 
-        with patch("backend.app.main.parse_csv", side_effect=fail_on_second_pass):
+        with patch("backend.app.main.parse_csv", side_effect=fail_import):
             status, result = await self.request(json.dumps(self.config))
 
         self.assertEqual(status, 400)
-        self.assertEqual(result["detail"], "Erro na segunda passagem")
+        self.assertEqual(result["detail"], "Erro na importação")
         self.assertFalse(paths[0].parent.exists())
 
     async def test_header_only_and_all_invalid_rows_produce_valid_json(self):
@@ -271,19 +272,19 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
             "barrado_por": ["SITUACAO_CADASTRAL_SACADO", "VALOR_MINIMO"],
         }])
 
-    async def test_cadastral_status_uses_mock_csv_in_sequential_and_parallel_validation(self):
+    async def test_cadastral_status_uses_mock_csv_with_different_batches(self):
         for rule in self.config["validadores"]:
             rule["ativo"] = rule["codigo"] == "SITUACAO_CADASTRAL_SACADO"
         content = self.csv_bytes(
             ("100,00", "100,00", "100,00"),
             documents=("01000171000183", "03.638.251/0001-94", "04.252.011/0001-10"),
         )
-        for workers in (1, 2):
+        for batch_size in (1, 2):
             with (
-                self.subTest(workers=workers),
+                self.subTest(batch_size=batch_size),
                 patch("backend.app.main.carregar_situacoes_cadastrais", wraps=carregar_situacoes_cadastrais) as loader,
                 patch("backend.app.main._write_validation_response", side_effect=partial(
-                    _write_validation_response, chunk_size=1, workers=workers
+                    _write_validation_response, chunk_size=batch_size
                 )),
             ):
                 status, result = await self.request(json.dumps(self.config), content=content)
@@ -324,14 +325,14 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
             "totais": {"linhas": 5, "aprovados": 2, "barrados": 3, "duplicatas_excluidas": 1,
                        "valor_nominal": "3000.00", "desconto": "60.00", "valor_liquido": "2940.00"},
         }
-        for workers in (1, 2):
+        for batch_size in (1, 2):
             with (
-                self.subTest(workers=workers),
+                self.subTest(batch_size=batch_size),
                 patch("backend.app.main._write_validation_response", side_effect=partial(
-                    _write_validation_response, chunk_size=2, workers=workers
+                    _write_validation_response, chunk_size=batch_size
                 )),
             ):
-                status, result = await self.request(json.dumps(self.config), content=content, path="/api/portfolio")
+                status, result = await self.request(json.dumps(self.config), content=content, precificar=True)
                 self.assertEqual(status, 200)
                 self.assertEqual(result, expected)
 
@@ -344,7 +345,7 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
             funds=(fund, fund, fund, fund, {"nome": "antecipe fidc", "cnpj": "92234400000180"}),
             maturity="31/01/2026",
         )
-        status, result = await self.request(json.dumps(self.config), content=content, path="/api/portfolio")
+        status, result = await self.request(json.dumps(self.config), content=content, precificar=True)
         self.assertEqual(status, 200)
         self.assertEqual([row["status"] for row in result["resultados"]], ["APROVADO"] * 4 + ["BARRADO"])
         self.assertEqual(result["resultados"][-1]["barrado_por"], ["DUPLICADO"])
@@ -365,7 +366,7 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_occurrence_does_not_exclude_a_valid_copy(self):
         content = self.csv_bytes(("inválido", "100,00"), ids=("001", "001"), maturity="31/01/2026")
-        status, result = await self.request(json.dumps(self.config), content=content, path="/api/portfolio")
+        status, result = await self.request(json.dumps(self.config), content=content, precificar=True)
         self.assertEqual(status, 200)
         self.assertEqual(result["resultados"][0]["barrado_por"], ["ERRO_CSV"])
         self.assertEqual(result["resultados"][1]["status"], "APROVADO")
@@ -377,7 +378,7 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
         for amounts in ((), ("100,00",)):
             with self.subTest(amounts=amounts):
                 status, result = await self.request(
-                    json.dumps(config), content=self.csv_bytes(amounts, maturity="31/01/2026"), path="/api/portfolio"
+                    json.dumps(config), content=self.csv_bytes(amounts, maturity="31/01/2026"), precificar=True
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(result["totais"]["aprovados"], 0)
@@ -387,13 +388,46 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
                 if amounts:
                     self.assertEqual(result["resultados"][0]["barrado_por"], ["PRECIFICACAO_INVALIDA"])
 
-    async def test_portfolio_requires_pricing_but_validation_remains_compatible(self):
+    async def test_pricing_is_required_when_enabled_and_optional_for_diagnostics(self):
         config = {key: value for key, value in self.config.items() if key != "precificacao"}
-        status, _ = await self.request(json.dumps(config), path="/api/portfolio")
-        self.assertEqual(status, 400)
+        for precificar in (None, True):
+            with self.subTest(precificar=precificar):
+                status, _ = await self.request(json.dumps(config), precificar=precificar)
+                self.assertEqual(status, 400)
         status, result = await self.request(json.dumps(config))
         self.assertEqual(status, 200)
         self.assertIsInstance(result, list)
+
+    async def test_validate_prices_by_default_and_returns_totals(self):
+        status, result = await self.request(
+            json.dumps(self.config),
+            content=self.csv_bytes(("1000,00",), maturity="31/01/2026"),
+            precificar=None,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(result, {
+            "resultados": [{
+                "linha": 2, "id": "000000001", "status": "APROVADO",
+                "valor_nominal": "1000.00", "desconto": "20.00",
+                "valor_liquido": "980.00", "prazo_dias": 30,
+            }],
+            "totais": {
+                "linhas": 1, "aprovados": 1, "barrados": 0, "duplicatas_excluidas": 0,
+                "valor_nominal": "1000.00", "desconto": "20.00", "valor_liquido": "980.00",
+            },
+        })
+
+    async def test_only_validate_route_is_available_for_processing(self):
+        status, _ = await self.request(json.dumps(self.config), path="/api/portfolio", precificar=None)
+        self.assertEqual(status, 404)
+        paths = app.openapi()["paths"]
+        self.assertNotIn("/api/portfolio", paths)
+        parameter = next(
+            parameter for parameter in paths["/api/validate"]["post"]["parameters"]
+            if parameter["name"] == "precificar"
+        )
+        self.assertEqual(parameter["in"], "query")
+        self.assertIs(parameter["schema"]["default"], True)
 
     async def test_rejects_invalid_config_structure_and_rule_parameters(self):
         for config in (
@@ -418,3 +452,85 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_old_upload_route_was_removed(self):
         status, _ = await self.request(json.dumps(self.config), path="/api/upload")
         self.assertEqual(status, 404)
+
+    async def test_fractional_cents_and_individual_overflow_are_csv_errors(self):
+        content = self.csv_bytes(
+            ("100,005", "100,0000", "92233720368547758,08"), ids=("001", "002", "003")
+        )
+        status, result = await self.request(json.dumps(self.config), content=content)
+        self.assertEqual(status, 200)
+        self.assertEqual(result, [
+            {"linha": 2, "id": "001", "status": "BARRADO", "barrado_por": ["ERRO_CSV"]},
+            {"linha": 3, "id": "002", "status": "APROVADO"},
+            {"linha": 4, "id": "003", "status": "BARRADO", "barrado_por": ["ERRO_CSV"]},
+        ])
+
+    async def test_aggregate_overflow_returns_400_for_concentration_and_portfolio(self):
+        content = self.csv_bytes(("92233720368547758,07",) * 2)
+        for precificar in (False, True):
+            with self.subTest(precificar=precificar):
+                config = json.loads(json.dumps(self.config))
+                config['precificacao']['taxa_mensal_percentual'] = 0
+                if not precificar:
+                    for rule in config['validadores']:
+                        rule['ativo'] = rule['codigo'] == 'CONCENTRACAO_MAXIMA_SACADO'
+                status, result = await self.request(json.dumps(config), content=content, precificar=precificar)
+                self.assertEqual(status, 400)
+                self.assertIn('64 bits', result['detail'])
+
+    async def test_operation_date_is_captured_once_before_import(self):
+        from datetime import date
+        for rule in self.config['validadores']:
+            rule['ativo'] = rule['codigo'] == 'NAO_VENCIDA'
+        with patch('backend.app.main.data_operacao', return_value=date(2026, 12, 31)) as operation_date:
+            status, result = await self.request(json.dumps(self.config), content=self.csv_bytes(('100,00',)))
+        self.assertEqual(status, 200)
+        self.assertEqual(result[0]['status'], 'APROVADO')
+        operation_date.assert_called_once()
+
+    async def test_concurrent_requests_use_isolated_databases(self):
+        strict = json.loads(json.dumps(self.config))
+        for rule in strict['validadores']:
+            if rule['codigo'] == 'VALOR_MINIMO':
+                rule['parametros']['valor_minimo'] = 1000
+        content = self.csv_bytes(('100,00',))
+        loose_result, strict_result = await asyncio.gather(
+            self.request(json.dumps(self.config), content=content),
+            self.request(json.dumps(strict), content=content),
+        )
+        self.assertEqual(loose_result[0], 200)
+        self.assertEqual(strict_result[0], 200)
+        self.assertEqual(loose_result[1][0]['status'], 'APROVADO')
+        self.assertEqual(strict_result[1][0]['barrado_por'], ['VALOR_MINIMO'])
+
+    async def test_temporary_response_cleans_up_on_send_failure_and_disconnect(self):
+        for interrupt in ('failure', 'disconnect'):
+            with self.subTest(interrupt=interrupt):
+                temporary = tempfile.TemporaryDirectory(prefix='antecipe-response-test-')
+                directory = Path(temporary.name)
+                path = directory / 'response.json'
+                path.write_bytes(b' ' * (256 * 1024))
+                response = TemporaryFileResponse(path, temporary)
+                disconnected = asyncio.Event()
+
+                async def receive():
+                    await disconnected.wait()
+                    return {'type': 'http.disconnect'}
+
+                async def send(message):
+                    if message['type'] == 'http.response.body':
+                        if interrupt == 'failure':
+                            raise OSError('connection closed')
+                        disconnected.set()
+                        await asyncio.sleep(0)
+
+                scope = {'type': 'http', 'method': 'POST', 'headers': [], 'asgi': {'version': '3.0', 'spec_version': '2.0'}}
+                try:
+                    if interrupt == 'failure':
+                        with self.assertRaises((OSError, ClientDisconnect)):
+                            await response(scope, receive, send)
+                    else:
+                        await response(scope, receive, send)
+                    self.assertFalse(directory.exists())
+                finally:
+                    temporary.cleanup()
