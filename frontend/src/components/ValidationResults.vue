@@ -22,6 +22,41 @@ const rejected = computed(() =>
   props.results.filter(r => r.status === 'BARRADO').length
 )
 
+function toCents(value) {
+  if (value === null || value === undefined || value === '') return 0
+
+  const normalized = String(value).trim().includes(',')
+    ? String(value).trim().replace(/\./g, '').replace(',', '.')
+    : value
+  const amount = Number(normalized)
+
+  return Number.isFinite(amount) ? Math.round(amount * 100) : 0
+}
+
+function formatCurrency(cents) {
+  return new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL'
+  }).format(cents / 100)
+}
+
+const monetaryTotals = computed(() => {
+  const approvedRows = props.results.filter(r => r.status === 'APROVADO')
+  const rejectedRows = props.results.filter(r => r.status === 'BARRADO')
+
+  return {
+    approvedNominal: formatCurrency(
+      approvedRows.reduce((total, row) => total + toCents(row.valor_nominal), 0)
+    ),
+    approvedLiquid: formatCurrency(
+      approvedRows.reduce((total, row) => total + toCents(row.valor_liquido), 0)
+    ),
+    rejectedNominal: formatCurrency(
+      rejectedRows.reduce((total, row) => total + toCents(row.valor_nominal), 0)
+    )
+  }
+})
+
 const approvalRate = computed(() =>
   props.results.length
     ? ((approved.value / props.results.length) * 100).toFixed(1)
@@ -63,6 +98,29 @@ function formatReason(reason) {
 
 <template>
   <div class="results-dashboard w-full space-y-6">
+
+    <section aria-label="Totais financeiros" class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div class="rounded-xl border border-gray-200 bg-white p-5">
+        <p class="text-sm text-gray-500">Valor nominal aprovado</p>
+        <p class="mt-2 text-2xl font-bold text-gray-900">
+          {{ monetaryTotals.approvedNominal }}
+        </p>
+      </div>
+
+      <div class="rounded-xl border border-green-200 bg-green-50 p-5">
+        <p class="text-sm text-green-700">Valor líquido aprovado</p>
+        <p class="mt-2 text-2xl font-bold text-green-700">
+          {{ monetaryTotals.approvedLiquid }}
+        </p>
+      </div>
+
+      <div class="rounded-xl border border-red-200 bg-red-50 p-5">
+        <p class="text-sm text-red-700">Valor nominal barrado</p>
+        <p class="mt-2 text-2xl font-bold text-red-700">
+          {{ monetaryTotals.rejectedNominal }}
+        </p>
+      </div>
+    </section>
 
     <!-- Summary -->
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
