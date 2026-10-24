@@ -146,7 +146,7 @@ async function uploadFile() {
   error.value = ''
   try {
     const response = await axios.post(
-      'http://192.168.189.20:8000/api/validate',
+      '/api/validate',
       formData
     )
 

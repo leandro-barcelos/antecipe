@@ -84,7 +84,8 @@ def _concentracao(codigo, parametros, ordem):
     entidade, coluna = coluna_concentracao(codigo, parametros)
     return (
         f'length(r.doc_{entidade})=14 AND EXISTS ('
-        f'SELECT 1 FROM grupos g WHERE g.ordem=? AND g.documento=r.{coluna} AND g.aprovado=1)',
+        f'SELECT 1 FROM grupos g WHERE g.ordem=? AND g.fundo=r.doc_fundo '
+        f'AND g.documento=r.{coluna} AND g.aprovado=1)',
         (ordem,),
     )
 
@@ -103,7 +104,7 @@ RULES = {
 
 
 def compilar_regras(config, referencia):
-    rules = [SQLRule('FUNDO_VALIDO', 0, 'r.pertence_fundo=1')]
+    rules = [SQLRule('FUNDO_VALIDO', 0, 'r.fundo_valido=1')]
     for ordem, regra in enumerate(config['validadores'], start=1):
         if not regra['ativo']:
             continue

@@ -37,7 +37,7 @@ def config_regra(codigo, parametros=None, ativo=True):
 def avaliar(config, rows, statuses=None):
     validar_configuracao(config)
     with ReceivablesDatabase(':memory:') as database:
-        database.import_rows((parse_row((i + 2, row)) for i, row in enumerate(rows)), config['fundo'], chunk_size=2)
+        database.import_rows((parse_row((i + 2, row)) for i, row in enumerate(rows)), chunk_size=2)
         database.import_statuses(statuses or {})
         validar_base(database, config, data_referencia=HOJE)
         return list(database.iter_records(chunk_size=2))
@@ -164,6 +164,24 @@ class ConcentracaoTests(unittest.TestCase):
     def test_cedente_usa_cnpj_como_padrao(self):
         config = config_regra('CONCENTRACAO_MAXIMA_CEDENTE', {'percentual_maximo':10})
         self.assertEqual([r['status'] for r in avaliar(config,self.rows())], ['APROVADO','APROVADO','BARRADO'])
+
+    def test_mesmo_sacado_em_fundos_diferentes_tem_limites_independentes(self):
+        config = config_regra('CONCENTRACAO_MAXIMA_SACADO', {'percentual_maximo':10})
+        rows = [
+            titulo(VALOR_NOMINAL='100,00'),
+            titulo(NU_DOCUMENTO='2', DOC_SACADO=OUTRO_CNPJ, VALOR_NOMINAL='900,00'),
+            titulo(DOC_FUNDO=OUTRO_CNPJ, NOME_FUNDO='OUTRO FIDC', VALOR_NOMINAL='900,00'),
+            titulo(DOC_FUNDO=OUTRO_CNPJ, NOME_FUNDO='OUTRO FIDC', NU_DOCUMENTO='2', DOC_SACADO=OUTRO_CNPJ),
+        ]
+        result = avaliar(config, rows)
+        self.assertEqual([r['status'] for r in result], ['APROVADO','BARRADO','BARRADO','APROVADO'])
+
+    def test_parcelas_com_vencimentos_diferentes_entram_na_concentracao(self):
+        config = config_regra('CONCENTRACAO_MAXIMA_SACADO', {'percentual_maximo':10})
+        rows = [titulo(), titulo(DATA_VENCIMENTO_ORIGINAL='25/10/2026'),
+                titulo(NU_DOCUMENTO='2', DOC_SACADO=OUTRO_CNPJ, VALOR_NOMINAL='900,00')]
+        result = avaliar(config, rows)
+        self.assertEqual([r.get('barrado_por') for r in result], [['CONCENTRACAO_MAXIMA_SACADO']] * 3)
 
     def test_nao_arredonda_excesso_e_nao_converte_produtos_para_real(self):
         cases = (('100,01','899,99',10), ('45035996273704,97','45035996273704,96',50))

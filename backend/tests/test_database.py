@@ -24,7 +24,7 @@ class DatabaseTests(unittest.TestCase):
         rows=[titulo(NU_DOCUMENTO='0001'), titulo(NU_DOCUMENTO='1'), titulo(NU_DOCUMENTO='0001'),
               titulo(NU_DOCUMENTO='0001',VALOR_NOMINAL='invalid'),titulo(NU_DOCUMENTO='')]
         with ReceivablesDatabase(':memory:') as db:
-            db.import_rows((parse_row((i+2,r)) for i,r in enumerate(rows)), FUNDO, chunk_size=1)
+            db.import_rows((parse_row((i+2,r)) for i,r in enumerate(rows)), chunk_size=1)
             result=db.connection.execute('SELECT linha,documento,duplicado_de,erros FROM recebiveis ORDER BY linha').fetchall()
             self.assertEqual(len(result),5)
             self.assertEqual(result[2]['duplicado_de'],2)
@@ -47,7 +47,7 @@ class DatabaseTests(unittest.TestCase):
         with ReceivablesDatabase(':memory:') as db:
             trace=[]
             db.connection.set_trace_callback(trace.append)
-            db.import_rows(rows(),FUNDO,chunk_size=2)
+            db.import_rows(rows(),chunk_size=2)
             self.assertEqual(db.connection.execute('SELECT COUNT(*) FROM recebiveis').fetchone()[0],100)
             self.assertTrue(all(ref() is None for ref in references))
             self.assertEqual(sum(s=='BEGIN ' or s=='BEGIN' for s in trace),1)
@@ -60,7 +60,7 @@ class DatabaseTests(unittest.TestCase):
                 yield parse_row((2,titulo()))
                 raise ValueError('broken CSV')
             with db, self.assertRaisesRegex(ValueError,'broken CSV'):
-                db.import_rows(rows(),FUNDO,chunk_size=1)
+                db.import_rows(rows(),chunk_size=1)
             with self.assertRaises(sqlite3.ProgrammingError):
                 db.connection.execute('SELECT 1')
             with closing(sqlite3.connect(path)) as connection:
@@ -69,9 +69,17 @@ class DatabaseTests(unittest.TestCase):
     def test_separate_databases_are_isolated(self):
         config={'fundo':FUNDO,'validadores':[]}
         with ReceivablesDatabase(':memory:') as first, ReceivablesDatabase(':memory:') as second:
-            first.import_rows([parse_row((2,titulo()))],FUNDO)
-            second.import_rows([parse_row((2,titulo(NU_DOCUMENTO='2')))],FUNDO)
+            first.import_rows([parse_row((2,titulo()))])
+            second.import_rows([parse_row((2,titulo(NU_DOCUMENTO='2')))])
             validar_base(first,config,data_referencia=date(2026,10,24))
             validar_base(second,config,data_referencia=date(2026,10,24))
             self.assertEqual(next(first.iter_records())['id'],'0001')
             self.assertEqual(next(second.iter_records())['id'],'2')
+
+    def test_installments_are_distinct_and_only_same_maturity_is_duplicate(self):
+        rows = [titulo(), titulo(DATA_VENCIMENTO_ORIGINAL='25/10/2026'),
+                titulo(DATA_VENCIMENTO_ORIGINAL='25/10/2026')]
+        with ReceivablesDatabase(':memory:') as db:
+            db.import_rows((parse_row((i + 2, row)) for i, row in enumerate(rows)), chunk_size=1)
+            result = db.connection.execute('SELECT linha,duplicado_de FROM recebiveis ORDER BY linha').fetchall()
+            self.assertEqual([(r['linha'], r['duplicado_de']) for r in result], [(2,None),(3,None),(4,3)])

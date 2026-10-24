@@ -8,7 +8,7 @@ from .validator import normalizar_cnpj, normalizar_nome
 
 
 DEFAULT_CHUNK_SIZE = 5000
-BASE = "r.erros IS NULL AND r.duplicado_de IS NULL AND r.pertence_fundo=1"
+BASE = "r.erros IS NULL AND r.duplicado_de IS NULL AND r.fundo_valido=1"
 SCHEMA = """
 CREATE TABLE recebiveis (
     linha INTEGER PRIMARY KEY,
@@ -18,7 +18,7 @@ CREATE TABLE recebiveis (
     nome_sacado TEXT, doc_sacado TEXT, raiz_sacado TEXT,
     tipo TEXT, nominal INTEGER, aquisicao INTEGER, vencimento INTEGER, prazo INTEGER,
     cnpj_sacado_valido INTEGER, erros TEXT,
-    pertence_fundo INTEGER NOT NULL DEFAULT 0,
+    fundo_valido INTEGER NOT NULL,
     duplicado_de INTEGER,
     aprovado INTEGER NOT NULL DEFAULT 0
 );
@@ -29,8 +29,8 @@ CREATE TABLE falhas (
 ) WITHOUT ROWID;
 CREATE TABLE cadastro (cnpj TEXT PRIMARY KEY, situacao TEXT) WITHOUT ROWID;
 CREATE TABLE grupos (
-    ordem INTEGER NOT NULL, documento TEXT NOT NULL, total INTEGER NOT NULL,
-    aprovado INTEGER NOT NULL, PRIMARY KEY (ordem, documento)
+    ordem INTEGER NOT NULL, fundo TEXT NOT NULL, documento TEXT NOT NULL, total INTEGER NOT NULL,
+    aprovado INTEGER NOT NULL, PRIMARY KEY (ordem, fundo, documento)
 ) WITHOUT ROWID;
 CREATE TABLE precos (
     linha INTEGER PRIMARY KEY REFERENCES recebiveis(linha),
@@ -69,15 +69,15 @@ class ReceivablesDatabase:
     def __exit__(self, *args):
         self.connection.close()
 
-    def import_rows(self, rows, fundo, *, chunk_size=DEFAULT_CHUNK_SIZE):
+    def import_rows(self, rows, *, chunk_size=DEFAULT_CHUNK_SIZE):
         if chunk_size < 1:
             raise ValueError("chunk_size deve ser maior que zero")
         cnpj = CNPJ()
         sql = """INSERT INTO recebiveis (
             linha,documento,nome_fundo,doc_fundo,nome_cedente,doc_cedente,raiz_cedente,
             nome_sacado,doc_sacado,raiz_sacado,tipo,nominal,aquisicao,vencimento,prazo,
-            cnpj_sacado_valido,erros
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
+            cnpj_sacado_valido,erros,fundo_valido
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
         batch = []
         with self.connection:
             for result in rows:
@@ -99,24 +99,21 @@ class ReceivablesDatabase:
                     (vencimento - aquisicao).days if aquisicao and vencimento else None,
                     int(cnpj.validate(data.get("DOC_SACADO", ""))),
                     json.dumps(result.errors, ensure_ascii=False) if result.errors else None,
+                    int(bool(data.get("NOME_FUNDO", "").strip()) and cnpj.validate(data.get("DOC_FUNDO", ""))),
                 ))
                 if len(batch) >= chunk_size:
                     self.connection.executemany(sql, batch)
                     batch.clear()
             if batch:
                 self.connection.executemany(sql, batch)
-            self.connection.execute(
-                "UPDATE recebiveis SET pertence_fundo=COALESCE(doc_fundo=? AND nome_fundo=?,0)",
-                (normalizar_cnpj(fundo["cnpj"]), normalizar_nome(fundo["nome"])),
-            )
             self.connection.execute("""CREATE INDEX documentos ON recebiveis
-                (doc_fundo,doc_cedente,doc_sacado,documento,linha)
-                WHERE erros IS NULL AND pertence_fundo=1""")
+                (doc_fundo,doc_cedente,doc_sacado,documento,vencimento,linha)
+                WHERE erros IS NULL AND fundo_valido=1""")
             self.connection.execute("""WITH primeiros AS MATERIALIZED (
                 SELECT linha, MIN(linha) OVER (
-                    PARTITION BY doc_fundo,doc_cedente,doc_sacado,documento
+                    PARTITION BY doc_fundo,doc_cedente,doc_sacado,documento,vencimento
                 ) AS primeira
-                FROM recebiveis WHERE erros IS NULL AND pertence_fundo=1
+                FROM recebiveis WHERE erros IS NULL AND fundo_valido=1
                     AND doc_fundo<>'' AND doc_cedente<>'' AND doc_sacado<>'' AND documento<>''
             ) UPDATE recebiveis AS r SET duplicado_de=p.primeira
               FROM primeiros p WHERE p.linha=r.linha AND p.primeira<r.linha""")

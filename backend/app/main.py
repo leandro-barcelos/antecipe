@@ -139,7 +139,7 @@ def _write_validation_response(
     try:
         with ReceivablesDatabase(response_path.with_suffix(".sqlite")) as database:
             database.import_rows(
-                parse_csv(file_path), config["fundo"], chunk_size=chunk_size
+                parse_csv(file_path), chunk_size=chunk_size
             )
             if any(
                 regra["ativo"] and regra["codigo"] == "SITUACAO_CADASTRAL_SACADO"

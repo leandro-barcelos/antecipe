@@ -20,14 +20,18 @@ def validar_base(database, config, *, data_referencia=None):
     ]
     with connection:
         if concentration:
-            total = connection.execute(f'SELECT COALESCE(SUM(r.nominal),0) FROM recebiveis r WHERE {BASE}').fetchone()[0]
             for order, rule in concentration:
                 entity, column = coluna_concentracao(rule['codigo'], rule['parametros'])
-                connection.execute(f'''INSERT INTO grupos
-                    SELECT ?,r.{column},SUM(r.nominal),concentracao_exata(SUM(r.nominal),?,?)
-                    FROM recebiveis r WHERE {BASE} AND length(r.doc_{entity})=14
-                    GROUP BY r.{column}''',
-                    (order, total, str(rule['parametros']['percentual_maximo'])),
+                connection.execute(f'''WITH fundos AS MATERIALIZED (
+                    SELECT r.doc_fundo,SUM(r.nominal) total FROM recebiveis r
+                    WHERE {BASE} GROUP BY r.doc_fundo
+                ) INSERT INTO grupos
+                    SELECT ?,r.doc_fundo,r.{column},SUM(r.nominal),
+                        concentracao_exata(SUM(r.nominal),f.total,?)
+                    FROM recebiveis r JOIN fundos f ON f.doc_fundo=r.doc_fundo
+                    WHERE {BASE} AND length(r.doc_{entity})=14
+                    GROUP BY r.doc_fundo,r.{column}''',
+                    (order, str(rule['parametros']['percentual_maximo'])),
                 )
         for rule in rules:
             connection.execute(

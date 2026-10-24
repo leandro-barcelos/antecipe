@@ -190,13 +190,14 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
             {**fund, "cnpj": "11.222.333/0001-81"},
             {**fund, "nome": "OUTRO FIDC"},
             {"cnpj": fund["cnpj"]}, {"nome": fund["nome"]}, {}, fund,
+            {**fund, "cnpj": "92.234.400/0001-81"},
         )
         content = self.csv_bytes(("100,00",) * len(funds), funds=funds)
         expected = [
             {"linha": index + 2, "id": f"{index + 1:09d}", "status": "BARRADO", "barrado_por": ["FUNDO_VALIDO"]}
             for index in range(len(funds))
         ]
-        for index in (0, len(funds) - 1):
+        for index in (0, 1, 2, 6):
             expected[index] = {"linha": index + 2, "id": f"{index + 1:09d}", "status": "APROVADO"}
         for batch_size in (1, 2):
             with (
@@ -209,7 +210,7 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(status, 200)
                 self.assertEqual(result, expected)
 
-    async def test_other_funds_do_not_increase_concentration_base(self):
+    async def test_funds_have_separate_concentration_bases(self):
         for rule in self.config["validadores"]:
             rule["ativo"] = rule["codigo"] == "CONCENTRACAO_MAXIMA_SACADO"
         content = self.csv_bytes(
@@ -221,7 +222,7 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 200)
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0]["barrado_por"], ["CONCENTRACAO_MAXIMA_SACADO"])
-        self.assertIn("FUNDO_VALIDO", result[1]["barrado_por"])
+        self.assertEqual(result[1]["barrado_por"], ["CONCENTRACAO_MAXIMA_SACADO"])
 
     async def test_rejects_invalid_fund_configuration(self):
         for fund in (None, {}, {"nome": " ", "cnpj": "92234400000180"}, {"nome": "ANTECIPE FIDC", "cnpj": "92234400000181"}):
@@ -301,6 +302,16 @@ class ValidationEndpointTests(unittest.IsolatedAsyncioTestCase):
             status, _ = await self.request(json.dumps(self.config))
         self.assertEqual(status, 200)
         loader.assert_not_called()
+
+    async def test_cadastral_decision_follows_mock_even_when_reference_disagrees(self):
+        for rule in self.config['validadores']:
+            rule['ativo'] = rule['codigo'] == 'SITUACAO_CADASTRAL_SACADO'
+        status, result = await self.request(
+            json.dumps(self.config),
+            content=self.csv_bytes(('100,00',), documents=('28.297.129/0002-03',)),
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(result[0]['status'], 'APROVADO')
 
     async def test_rejects_missing_malformed_or_non_object_json_config(self):
         for config in (None, "{", "[]", "null"):
